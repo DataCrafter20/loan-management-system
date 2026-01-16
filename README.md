@@ -314,7 +314,18 @@ System:
     4. Generates downloadable PDF
     5. Provides insights on payment patterns
 ```
+---
 
+## 👤 Author
+
+**Ndivhuwo Munyai**
+
+AI Data Annotator | BSc Computer Science, Information Systems & Applied Mathematics Student | Python, SQL | Aspiring Data, AI & ML Professional
+
+GitHub: [https://github.com/DataCrafter20](https://github.com/DataCrafter20)
+Email : **[ndivhuwo11@gmail.com](mailto:nmunyai11@gamil.com)**
+
+---
 ---
 
 ## 📄 License
@@ -326,7 +337,7 @@ System:
 
 ⚠️ All usage, whether personal, commercial, or educational, must be **approved and licensed by the author**.
 
-💌 For permission requests or licensing inquiries, please contact: **[ndivhuwo@datacrafter.dev](mailto:ndivhuwo@datacrafter.dev)**
+💌 For permission requests or licensing inquiries, please contact: **[ndivhuwo11@gmail.com](mailto:nmunyai11@gamil.com)**
 
 ---
 
