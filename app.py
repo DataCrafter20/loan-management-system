@@ -748,8 +748,19 @@ if "auth_session" not in st.session_state:
 if "user" not in st.session_state:
     st.session_state.user = None
 
+# Legacy function for compatibility
+def hash_pw(pw: str) -> str:
+    import hashlib
+    return hashlib.sha256(pw.encode()).hexdigest()
+
 def login_page():
     st.title("🔐 Login")
+    
+    # Initialize Supabase client check
+    if not supabase_client:
+        st.error("⚠️ Supabase connection failed. Check your API keys in settings.")
+        return
+    
     col1, col2 = st.columns([1, 2])
     
     with col1:
@@ -775,19 +786,29 @@ def login_page():
                     else:
                         st.error("Login failed. Please check your credentials.")
             except Exception as e:
-                st.error(f"Login error: {str(e)}")
+                error_msg = str(e)
+                if "Invalid login credentials" in error_msg:
+                    st.error("Invalid email or password")
+                elif "Email not confirmed" in error_msg:
+                    st.error("Please confirm your email first")
+                elif "401" in error_msg:
+                    st.error("Authentication error. Check Supabase API key configuration.")
+                else:
+                    st.error(f"Login error: {error_msg}")
         
         # Sign up option
         with st.expander("Don't have an account? Sign up"):
-            new_email = st.text_input("Email for signup")
-            new_password = st.text_input("Password for signup", type="password")
-            confirm_password = st.text_input("Confirm password", type="password")
+            new_email = st.text_input("Email for signup", key="signup_email")
+            new_password = st.text_input("Password for signup", type="password", key="signup_password")
+            confirm_password = st.text_input("Confirm password", type="password", key="confirm_password")
             
-            if st.button("Sign up"):
+            if st.button("Sign up", key="signup_button"):
                 if not new_email or not new_password:
                     st.error("Please enter email and password")
                 elif new_password != confirm_password:
                     st.error("Passwords don't match")
+                elif len(new_password) < 6:
+                    st.error("Password must be at least 6 characters")
                 else:
                     try:
                         signup_response = supabase_client.auth.sign_up({
@@ -795,24 +816,28 @@ def login_page():
                             "password": new_password
                         })
                         if signup_response.user:
-                            st.success("Account created successfully! Please login.")
+                            st.success("✅ Account created successfully! You can now login.")
                         else:
                             st.error("Signup failed. Please try again.")
                     except Exception as e:
                         st.error(f"Signup error: {str(e)}")
     
     with col2:
-        business = get_setting("business_name")
-        st.markdown("### Optional: Set Business Name (one-time)")
-        if not business and st.session_state.auth_session:
-            bn = st.text_input("Business name (optional)")
-            if st.button("Save business name"):
-                if bn.strip():
-                    set_setting("business_name", bn.strip())
-                    st.success("Business name saved. It will show on every page.")
-                    st.rerun()
-                else:
-                    st.error("Please enter a non-empty name or cancel.")
+        # Only show business name setup if logged in
+        if st.session_state.auth_session:
+            business = get_setting("business_name")
+            st.markdown("### Optional: Set Business Name (one-time)")
+            if not business:
+                bn = st.text_input("Business name (optional)", key="business_name_input")
+                if st.button("Save business name", key="save_business"):
+                    if bn.strip():
+                        set_setting("business_name", bn.strip())
+                        st.success("Business name saved. It will show on every page.")
+                        st.rerun()
+                    else:
+                        st.error("Please enter a non-empty name or cancel.")
+        else:
+            st.info("Set your business name after logging in")
 
 def logout():
     """Logout from Supabase Auth"""
@@ -1696,3 +1721,4 @@ elif menu == "🚪 Logout":
 # ---------- END ----------
 update_loan_statuses()
 daily_backup()
+
