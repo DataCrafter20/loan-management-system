@@ -51,6 +51,11 @@ def format_money(v):
         s = s.rstrip("0").rstrip(".")
     return s
 
+def hash_pw(pw: str) -> str:
+    """Legacy function kept for compatibility - Supabase now handles auth"""
+    import hashlib
+    return hashlib.sha256(pw.encode()).hexdigest()
+
 def round_money(amount):
     """Round and format numbers - from STRUCTURE PLAN"""
     return round(float(amount), 2)
@@ -176,6 +181,7 @@ def get_setting(key):
     """Get setting from Supabase with user isolation"""
     try:
         user_id = get_current_user_id()
+        # If no user is logged in (login page), don't query settings
         if not user_id:
             return None
         
@@ -184,7 +190,9 @@ def get_setting(key):
             return response.data[0]["value"]
         return None
     except Exception as e:
-        st.error(f"Error getting setting {key}: {e}")
+        # Don't show error on login page
+        if "auth_session" in st.session_state and st.session_state.auth_session:
+            st.error(f"Error getting setting {key}: {e}")
         return None
 
 def set_setting(key, value):
