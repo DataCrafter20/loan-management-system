@@ -322,8 +322,8 @@ System:
 
 AI Data Annotator | BSc Computer Science, Information Systems & Applied Mathematics Student | Python, SQL | Aspiring Data, AI & ML Professional
 
-GitHub: [https://github.com/DataCrafter20](https://github.com/DataCrafter20)
-Email : **[ndivhuwo11@gmail.com](mailto:nmunyai11@gamil.com)**
+- **🐈‍⬛ GitHub**: ***[https://github.com/DataCrafter20](https://github.com/DataCrafter20)***
+- **📧 Email** : ***[ndivhuwo11@gmail.com](mailto:nmunyai11@gamil.com)***
 
 ---
 ---
