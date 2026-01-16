@@ -8,6 +8,11 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib import colors as rlcolors
 from reportlab.lib.styles import getSampleStyleSheet
 from dateutil.relativedelta import relativedelta
+import threading
+import time
+
+# Global lock for loan status updates
+loan_status_lock = threading.Lock()
 
 # ---------- SUPABASE CONFIG ----------
 import supabase
@@ -393,63 +398,102 @@ def process_payment(loan_id, payment_amount, payment_date):
         return False, f"Error processing payment: {str(e)}"
 
 
+ 
 def check_and_add_overdue_interest():
     """Check all loans and add interest for ALL missed due dates"""
-    try:
-        today = date.today()
-        
-        # Get active loans
-        loans_data = supabase_client.table("loans_new").select("*").neq("status", "Paid").execute()
-        
-        for loan in loans_data.data:
-            loan_id = loan["id"]
-            current_principal = loan["current_principal"]
-            current_due_date_str = loan["current_due_date"]
+    # Don't run if another update is in progress
+    if not loan_status_lock.locked():
+        try:
+            today = date.today()
+            user_id = get_current_user_id()
             
-            if not current_due_date_str:
-                continue
+            if not user_id:
+                return False  # Stop if no user is logged in
             
-            current_due_date = date.fromisoformat(current_due_date_str)
+            # Get active loans for current user only
+            loans_data = (
+                supabase_client
+                .table("loans_new")
+                .select("*")
+                .eq("user_id", user_id)
+                .neq("status", "Paid")
+                .execute()
+            )
             
-            # Loop through ALL missed months
-            while today > current_due_date:
-                # Check if interest already exists for this due date
-                existing_interest = supabase_client.table("loan_interest_history").select("*").eq("loan_id", loan_id).eq("due_date", current_due_date.isoformat()).execute()
+            for loan in loans_data.data:
+                loan_id = loan["id"]
+                current_principal = loan["current_principal"]
+                current_due_date_str = loan.get("current_due_date")
                 
-                if not existing_interest.data:
-                    interest_amount = calculate_interest(current_principal)
+                if not current_due_date_str:
+                    continue
+                
+                current_due_date = date.fromisoformat(current_due_date_str)
+                
+                # Loop through ALL missed months
+                while today > current_due_date:
+                    # Check if interest already exists for this due date
+                    existing_interest = (
+                        supabase_client
+                        .table("loan_interest_history")
+                        .select("*")
+                        .eq("loan_id", loan_id)
+                        .eq("due_date", current_due_date.isoformat())
+                        .execute()
+                    )
                     
-                    supabase_client.table("loan_interest_history").insert({
-                        "loan_id": loan_id,
-                        "due_date": current_due_date.isoformat(),
-                        "interest_amount": interest_amount,
-                        "principal_at_time": current_principal,
-                        "added_date": today.isoformat(),
-                        "is_paid": 0
-                    }).execute()
+                    if not existing_interest.data:
+                        interest_amount = calculate_interest(current_principal)
+                        
+                        supabase_client.table("loan_interest_history").insert({
+                            "loan_id": loan_id,
+                            "due_date": current_due_date.isoformat(),
+                            "interest_amount": interest_amount,
+                            "principal_at_time": current_principal,
+                            "added_date": today.isoformat(),
+                            "is_paid": 0,
+                            "user_id": user_id  # Ensure user_id is set
+                        }).execute()
+                    
+                    # Move to next due date
+                    current_due_date = current_due_date + relativedelta(months=1)
                 
-                # Move to next due date
-                current_due_date = current_due_date + relativedelta(months=1)
+                # Update the loan's current due date and status
+                supabase_client.table("loans_new").update({
+                    "current_due_date": current_due_date.isoformat(),
+                    "status": "Overdue"
+                }).eq("id", loan_id).execute()
             
-            # Update the loan's current due date
-            supabase_client.table("loans_new").update({
-                "current_due_date": current_due_date.isoformat(),
-                "status": "Overdue"
-            }).eq("id", loan_id).execute()
-        
-        return True
-    except Exception as e:
-        st.error(f"Error checking overdue interest: {e}")
-        return False
+            return True
+        except Exception as e:
+            # Suppress "temporarily unavailable" errors
+            if "temporarily unavailable" not in str(e) and "Errno 11" not in str(e):
+                st.error(f"Error checking overdue interest: {e}")
+            return False
+    return False
+
 
 def update_loan_statuses():
-    """Update status for all loans"""
+    """Update status for all loans with thread safety"""
+    # Acquire lock to prevent concurrent updates
+    if not loan_status_lock.acquire(blocking=False):
+        # Another update is already running, skip this one
+        return False
+    
     try:
         today = date.today()
+        
+        # Add a small delay to prevent rapid consecutive calls
+        time.sleep(0.5)
+        
         check_and_add_overdue_interest()
         
-        # Get all loans
-        loans_data = supabase_client.table("loans_new").select("*").execute()
+        # Get all loans for current user only
+        user_id = get_current_user_id()
+        if not user_id:
+            return False
+        
+        loans_data = supabase_client.table("loans_new").select("*").eq("user_id", user_id).execute()
         
         for loan in loans_data.data:
             loan_id = loan["id"]
@@ -468,12 +512,20 @@ def update_loan_statuses():
                 else:
                     status = "Partial"
             
-            supabase_client.table("loans_new").update({"status": status}).eq("id", loan_id).execute()
+            supabase_client.table("loans_new").update({"status": status}).eq("id", loan_id).eq("user_id", user_id).execute()
         
         return True
     except Exception as e:
-        st.error(f"Error updating loan statuses: {e}")
+        # Only show error if it's not a resource locking issue
+        if "temporarily unavailable" not in str(e) and "Errno 11" not in str(e):
+            st.error(f"Error updating loan statuses: {e}")
         return False
+    finally:
+        # Always release the lock
+        try:
+            loan_status_lock.release()
+        except:
+            pass
 
 # Run status updates on start
 update_loan_statuses()
@@ -761,7 +813,6 @@ if "auth_session" not in st.session_state:
 if "user" not in st.session_state:
     st.session_state.user = None
 
-
 def login_page():
     st.title("🔐 Login")
     
@@ -790,6 +841,19 @@ def login_page():
                     if auth_response.user:
                         st.session_state.auth_session = auth_response
                         st.session_state.user = auth_response.user.email
+                        
+                        # Get username from user_profiles
+                        try:
+                            profile = supabase_client.table("user_profiles")\
+                                .select("*").eq("user_id", auth_response.user.id).execute()
+                            if profile.data:
+                                st.session_state.user_display_name = profile.data[0]["display_name"] or profile.data[0]["username"]
+                            else:
+                                # Fallback to email prefix
+                                st.session_state.user_display_name = auth_response.user.email.split('@')[0]
+                        except:
+                            st.session_state.user_display_name = auth_response.user.email.split('@')[0]
+                        
                         st.success("Login successful!")
                         st.rerun()
                     else:
@@ -808,46 +872,76 @@ def login_page():
         # Sign up option
         with st.expander("Don't have an account? Sign up"):
             new_email = st.text_input("Email for signup", key="signup_email")
+            new_username = st.text_input("Choose a username", key="signup_username")
             new_password = st.text_input("Password for signup", type="password", key="signup_password")
             confirm_password = st.text_input("Confirm password", type="password", key="confirm_password")
-            
+
             if st.button("Sign up", key="signup_button"):
-                if not new_email or not new_password:
-                    st.error("Please enter email and password")
+                if not new_email or not new_password or not new_username:
+                    st.error("Please enter email, username and password")
                 elif new_password != confirm_password:
                     st.error("Passwords don't match")
+                elif len(new_username) < 3:
+                    st.error("Username must be at least 3 characters")
                 elif len(new_password) < 6:
                     st.error("Password must be at least 6 characters")
                 else:
                     try:
+                        # Check if username already exists
+                        existing = supabase_client.table("user_profiles")\
+                            .select("id").eq("username", new_username).execute()
+
+                        if existing.data:
+                            st.error("Username already taken. Please choose another.")
+                            st.stop()
+
+                        # Create user in Supabase Auth
                         signup_response = supabase_client.auth.sign_up({
                             "email": new_email,
-                            "password": new_password
+                            "password": new_password,
+                            "options": {
+                                "data": {
+                                    "username": new_username,
+                                    "display_name": new_username
+                                }
+                            }
                         })
+
                         if signup_response.user:
-                            st.success("✅ Account created successfully! You can now login.")
+                            # Create user profile row
+                            supabase_client.table("user_profiles").insert({
+                                "user_id": signup_response.user.id,
+                                "username": new_username,
+                                "display_name": new_username
+                            }).execute()
+
+                            st.success("✅ Account created successfully! Please check your email to confirm.")
                         else:
                             st.error("Signup failed. Please try again.")
+
                     except Exception as e:
-                        st.error(f"Signup error: {str(e)}")
-    
+                        if "already registered" in str(e):
+                            st.error("Email already registered")
+                        else:
+                            st.error(f"Signup error: {str(e)}")
+
     with col2:
-        # Only show business name setup if logged in
+        # REMOVE THIS ENTIRE BLOCK:
+        # st.info("Set your business name after logging in")
+        
+        # KEEP ONLY business name setup if you want it shown when logged in
         if st.session_state.auth_session:
             business = get_setting("business_name")
-            st.markdown("### Optional: Set Business Name (one-time)")
+            st.markdown("### Optional: Set Business Name")
             if not business:
                 bn = st.text_input("Business name (optional)", key="business_name_input")
                 if st.button("Save business name", key="save_business"):
                     if bn.strip():
                         set_setting("business_name", bn.strip())
-                        st.success("Business name saved. It will show on every page.")
+                        st.success("Business name saved.")
                         st.rerun()
-                    else:
-                        st.error("Please enter a non-empty name or cancel.")
-        else:
-            st.info("Set your business name after logging in")
-
+    
+   
 def logout():
     try:
         supabase_client.auth.sign_out()
@@ -880,9 +974,11 @@ business_name = get_setting("business_name") or ""
 # ---------- HEADER HELPER ----------
 def page_header(page_name: str):
     """Display header with business name and emojis"""
+    user_display_name = st.session_state.user_display_name if hasattr(st.session_state, 'user_display_name') else st.session_state.user
+    
     if business_name:
         headers = {
-            "Tutorial Dashboard": f"## 🏢 **{business_name}** ",
+            "Tutorial Dashboard": f"## 👋 Welcome {user_display_name} to **{business_name}**",
             "Groups": f"## 📁 Manage Groups | **{business_name}**",
             "Clients": f"## 👤 Manage Clients | **{business_name}**",
             "Loans": f"## 💰 Loans Overview | **{business_name}**",
@@ -895,7 +991,7 @@ def page_header(page_name: str):
         }
     else:
         headers = {
-            "Tutorial Dashboard": f"## 👋 Welcome {st.session_state.user}",
+            "Tutorial Dashboard": f"## 👋 Welcome {user_display_name}",
             "Groups": f"## 📁 Manage Groups",
             "Clients": f"## 👤 Manage Clients",
             "Loans": f"## 💰 Loans Overview",
@@ -907,8 +1003,8 @@ def page_header(page_name: str):
             "Logout": f"## 🚪 Logout"
         }
     
-    st.markdown(headers.get(page_name, f"## 👋 Welcome {st.session_state.user}"))
-
+    st.markdown(headers.get(page_name, f"## 👋 Welcome {user_display_name}"))
+    
 # ---------- SIDEBAR NAV ----------
 st.sidebar.title(f"🏢 {business_name}" if business_name else "🏢 Menu")
 menu = st.sidebar.radio("Navigate", [
@@ -1675,38 +1771,67 @@ elif menu == "🧾 PDF Export":
 elif menu == "🔐 Change Password":
     page_header("Change Password")
     
-    st.subheader("Change your password or email")
+    st.subheader("Change your password, email, or username")
     
     # Get current user info
-    current_email = st.session_state.user  # This should be the email from Supabase Auth
+    current_email = st.session_state.user  # Email from Supabase Auth
+    current_username = st.session_state.user_display_name if hasattr(st.session_state, 'user_display_name') else ""
     
     with st.form("change_password"):
+        # Show current username/email
+        if current_username:
+            st.info(f"**Current username:** {current_username}")
         st.info(f"**Current email:** {current_email}")
         
         current_pw = st.text_input("Current password", type="password")
         new_email = st.text_input("New email (optional)", value=current_email)
+        new_username = st.text_input("New username (optional)", value=current_username)
         new_pw = st.text_input("New password", type="password")
         confirm_pw = st.text_input("Confirm new password", type="password")
         
         if st.form_submit_button("Update credentials"):
+            # Basic validations
             if not current_pw:
                 st.error("Current password is required")
             elif new_pw and new_pw != confirm_pw:
                 st.error("New passwords do not match")
             elif new_pw and len(new_pw) < 6:
                 st.error("New password must be at least 6 characters")
+            elif new_username and len(new_username) < 3:
+                st.error("Username must be at least 3 characters")
             else:
                 try:
-                    # First, verify current password by trying to re-authenticate
+                    # Verify current password
                     try:
-                        # This verifies the current password is correct
                         supabase_client.auth.sign_in_with_password({
                             "email": current_email,
                             "password": current_pw
                         })
-                    except Exception as auth_error:
+                    except Exception:
                         st.error("Current password is incorrect")
                         st.stop()
+                    
+                    # Update username if changed
+                    if new_username and new_username != current_username:
+                        try:
+                            # Check if username is available
+                            existing = supabase_client.table("user_profiles")\
+                                .select("*").eq("username", new_username).execute()
+                            if existing.data:
+                                st.error("Username already taken. Please choose another.")
+                                st.stop()
+                            
+                            # Update user_profiles table
+                            supabase_client.table("user_profiles").update({
+                                "username": new_username,
+                                "display_name": new_username
+                            }).eq("user_id", get_current_user_id()).execute()
+                            
+                            # Update session
+                            st.session_state.user_display_name = new_username
+                            st.success("✅ Username updated successfully")
+                        except Exception as e:
+                            st.error(f"Error updating username: {str(e)}")
                     
                     # Update email if changed
                     if new_email != current_email:
@@ -1734,17 +1859,19 @@ elif menu == "🔐 Change Password":
                             st.error(f"Error updating password: {str(pw_error)}")
                             st.stop()
                     
-                    # Show success message
+                    # Summary messages
                     if new_email != current_email and new_pw:
                         st.success("✅ Email and password updated successfully! Please login again.")
                     elif new_email != current_email:
                         st.success("✅ Email updated successfully!")
                     elif new_pw:
                         st.success("✅ Password updated successfully!")
+                    elif new_username != current_username:
+                        st.info("✅ Username updated successfully!")
                     else:
                         st.info("No changes were made")
                     
-                    # If email was changed, suggest re-login
+                    # Suggest re-login if email changed
                     if new_email != current_email:
                         st.warning("Since you changed your email, you might need to login again on your next visit.")
                     
@@ -1775,6 +1902,7 @@ elif menu == "🔐 Change Password":
                 st.success("📧 Password reset email sent! Check your inbox.")
             except Exception as e:
                 st.error(f"Error sending reset email: {str(e)}")
+
 
 # ---------- PAGE: Logout ----------
 elif menu == "🚪 Logout":
