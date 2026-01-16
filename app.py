@@ -253,29 +253,6 @@ def calculate_total_owed(loan_id):
         st.error(f"Error calculating total owed: {e}")
         return 0, 0, 0
 
-# ---------- INITIALIZE SUPABASE TABLES ----------
-'''def init_supabase_tables():
-    """Initialize Supabase tables if they don't exist"""
-    # Note: Tables should be created manually in Supabase dashboard
-    # This function just ensures basic data exists
-    try:
-        # Check if admin user exists
-        users = get_table_data("users", {"username": "admin"})
-        if not users:
-            supabase_client.table("users").insert({
-                "username": "admin",
-                "password": hash_pw("admin123")
-            }).execute()
-        
-        # Initialize views by creating helper functions or materialized views
-        # Note: Supabase doesn't support CREATE VIEW via REST API
-        # We'll handle views as queries instead
-        
-    except Exception as e:
-        st.error(f"Error initializing Supabase: {e}")
-
-# Initialize tables
-init_supabase_tables()'''
 
 # ---------- CORE LOGIC ----------
 def calculate_interest(principal):
@@ -748,10 +725,6 @@ if "auth_session" not in st.session_state:
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# Legacy function for compatibility
-def hash_pw(pw: str) -> str:
-    import hashlib
-    return hashlib.sha256(pw.encode()).hexdigest()
 
 def login_page():
     st.title("🔐 Login")
@@ -1773,5 +1746,3 @@ elif menu == "🚪 Logout":
 # ---------- END ----------
 update_loan_statuses()
 daily_backup()
-
-
