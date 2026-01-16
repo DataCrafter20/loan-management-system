@@ -1,5 +1,3 @@
----
-
 # 🧠 InterestIQ — Intelligent Loan Management & Financial Assistant
 
 > *Smart loan tracking meets intelligent interest calculation — financial clarity through technology.*
