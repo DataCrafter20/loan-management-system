@@ -337,7 +337,7 @@ AI Data Annotator | BSc Computer Science, Information Systems & Applied Mathemat
 
 ⚠️ All usage, whether personal, commercial, or educational, must be **approved and licensed by the author**.
 
-💌 For permission requests or licensing inquiries, please contact: **[ndivhuwo11@gmail.com](mailto:nmunyai11@gamil.com)**
+💌 For permission requests or licensing inquiries, please contact: ***[ndivhuwo11@gmail.com](mailto:nmunyai11@gamil.com)***
 
 ---
 
