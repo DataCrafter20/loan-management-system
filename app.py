@@ -292,70 +292,106 @@ def calculate_total_owed(loan_id):
 def process_payment(loan_id, payment_amount, payment_date):
     """Process a payment according to the new rules"""
     try:
-        # Get loan info
-        loans = get_table_data("loans_new", {"id": loan_id})
-        if not loans:
-            return False, "Loan not found"
-        
-        loan = loans[0]
-        current_principal = loan["current_principal"]
-        
-        # Get unpaid interest entries
-        interest_data = supabase_client.table("loan_interest_history").select("*").eq("loan_id", loan_id).eq("is_paid", 0).gt("interest_amount", 0).order("due_date").execute()
-        
+        # ---------------- AUTH ----------------
+        user_id = get_current_user_id()
+        if not user_id:
+            return False, "User not authenticated"
+
+        # ---------------- GET LOAN (USER-SCOPED) ----------------
+        loans = (
+            supabase_client
+            .table("loans_new")
+            .select("*")
+            .eq("id", loan_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        if not loans.data:
+            return False, "Loan not found or access denied"
+
+        loan = loans.data[0]
+        current_principal = float(loan["current_principal"])
+
+        # ---------------- GET UNPAID INTEREST ----------------
+        interest_data = (
+            supabase_client
+            .table("loan_interest_history")
+            .select("*")
+            .eq("loan_id", loan_id)
+            .eq("user_id", user_id)
+            .eq("is_paid", 0)
+            .gt("interest_amount", 0)
+            .order("due_date")
+            .execute()
+        )
+
         remaining_payment = round(float(payment_amount), 2)
-        applied_to_interest = 0
-        applied_to_principal = 0
-        
-        # Pay interest first (oldest interest first)
+        applied_to_interest = 0.0
+        applied_to_principal = 0.0
+
+        # ---------------- PAY INTEREST FIRST ----------------
         for entry in interest_data.data:
             if remaining_payment <= 0:
                 break
-            
+
             entry_id = entry["id"]
-            interest_amount = entry["interest_amount"]
-            
+            interest_amount = float(entry["interest_amount"])
+
             if remaining_payment >= interest_amount:
-                # Mark as fully paid
-                supabase_client.table("loan_interest_history").update({"is_paid": 1}).eq("id", entry_id).execute()
+                # Fully pay interest
+                supabase_client.table("loan_interest_history").update({
+                    "is_paid": 1
+                }).eq("id", entry_id).eq("user_id", user_id).execute()
+
                 applied_to_interest += interest_amount
                 remaining_payment = round(remaining_payment - interest_amount, 2)
             else:
-                # Partially pay interest
+                # Partial interest payment
                 new_interest_amount = round(interest_amount - remaining_payment, 2)
-                supabase_client.table("loan_interest_history").update({"interest_amount": new_interest_amount}).eq("id", entry_id).execute()
+
+                supabase_client.table("loan_interest_history").update({
+                    "interest_amount": new_interest_amount
+                }).eq("id", entry_id).eq("user_id", user_id).execute()
+
                 applied_to_interest += remaining_payment
                 remaining_payment = 0
-        
-        # Any remaining payment reduces principal
+
+        # ---------------- APPLY TO PRINCIPAL ----------------
         if remaining_payment > 0:
             applied_to_principal = remaining_payment
             new_principal = round(current_principal - applied_to_principal, 2)
-            if new_principal < 0:
-                new_principal = 0
-            
-            supabase_client.table("loans_new").update({"current_principal": new_principal}).eq("id", loan_id).execute()
-        
-        # Record payment
+            new_principal = max(new_principal, 0)
+
+            supabase_client.table("loans_new").update({
+                "current_principal": new_principal
+            }).eq("id", loan_id).eq("user_id", user_id).execute()
+
+        # ---------------- RECORD PAYMENT (CRITICAL FIX) ----------------
         supabase_client.table("payments_new").insert({
             "loan_id": loan_id,
             "amount": payment_amount,
             "payment_date": payment_date.isoformat(),
             "applied_to_interest": applied_to_interest,
             "applied_to_principal": applied_to_principal,
-            "remaining_amount": remaining_payment
+            "remaining_amount": remaining_payment,
+            "user_id": user_id  # ✅ REQUIRED
         }).execute()
-        
-        # Update loan status
+
+        # ---------------- UPDATE LOAN STATUS ----------------
         total_owed, _, _ = calculate_total_owed(loan_id)
-        if total_owed <= 0:
-            supabase_client.table("loans_new").update({"status": "Paid"}).eq("id", loan_id).execute()
-        else:
-            supabase_client.table("loans_new").update({"status": "Active"}).eq("id", loan_id).execute()
-        
+
+        new_status = "Paid" if total_owed <= 0 else "Active"
+
+        supabase_client.table("loans_new").update({
+            "status": new_status
+        }).eq("id", loan_id).eq("user_id", user_id).execute()
+
         return True, "Payment processed successfully"
+
     except Exception as e:
         return False, f"Error processing payment: {str(e)}"
+
 
 def check_and_add_overdue_interest():
     """Check all loans and add interest for ALL missed due dates"""
@@ -1466,7 +1502,6 @@ elif menu == "🔍 Search":
                     st.dataframe(styled_df)
                 else:
                     st.info("No loans due on that date")
-
 # ---------- PAGE: PDF Export ----------
 elif menu == "🧾 PDF Export":
     page_header("PDF Report")
@@ -1534,8 +1569,11 @@ elif menu == "🧾 PDF Export":
                     st.error("No loans found")
                     st.stop()
             
-            # Create PDF
-            doc = SimpleDocTemplate(filename)
+            # ---------- CREATE PDF IN MEMORY ----------
+            import io
+            buffer = io.BytesIO()
+            
+            doc = SimpleDocTemplate(buffer)
             styles = getSampleStyleSheet()
             story = []
             
@@ -1548,14 +1586,10 @@ elif menu == "🧾 PDF Export":
             # Loans table
             story.append(Paragraph("Loans Overview", styles["Heading2"]))
             
-            # Prepare table data
             table_data = [["Client", "Group", "Loan Date", "Due Date", "Principal", "Interest", "Paid", "Total", "Status"]]
             
             for _, row in loans_df.iterrows():
-                # Apply color formatting
                 status_display = status_color(row['status'])
-                total_display = f"R {row['total']:.2f}"
-                paid_display = f"R {row['paid']:.2f}"
                 
                 table_data.append([
                     row['client'] if data_type == 'group' else '',
@@ -1564,12 +1598,11 @@ elif menu == "🧾 PDF Export":
                     row['due_date'],
                     f"R {row['principal']:.2f}",
                     f"R {row['interest']:.2f}",
-                    paid_display,
-                    total_display,
+                    f"R {row['paid']:.2f}",
+                    f"R {row['total']:.2f}",
                     status_display.replace("🟢", "").replace("🟡", "").replace("🔴", "").strip()
                 ])
             
-            # Create table
             t = Table(table_data, repeatRows=1)
             style = TableStyle([
                 ("GRID", (0,0), (-1,-1), 0.5, rlcolors.black),
@@ -1577,19 +1610,15 @@ elif menu == "🧾 PDF Export":
                 ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
             ])
             
-            # Apply colors to cells
             for i in range(1, len(table_data)):
-                # Total color (red if > 0)
                 total_value = float(table_data[i][7].replace('R', '').strip())
                 if total_value > 0:
                     style.add("TEXTCOLOR", (7, i), (7, i), rlcolors.red)
                 
-                # Paid color (green if > 0)
                 paid_value = float(table_data[i][6].replace('R', '').strip())
                 if paid_value > 0:
                     style.add("TEXTCOLOR", (6, i), (6, i), rlcolors.green)
                 
-                # Status colors
                 status_text = table_data[i][8]
                 if "Paid" in status_text:
                     style.add("TEXTCOLOR", (8, i), (8, i), rlcolors.green)
@@ -1627,8 +1656,20 @@ elif menu == "🧾 PDF Export":
             
             # Build PDF
             doc.build(story)
-            st.success(f"✅ PDF generated: {filename}")
-            st.markdown(f"**Saved as:** `{filename}` in the app folder")
+            pdf_data = buffer.getvalue()
+            buffer.close()
+            
+            st.success("✅ PDF generated successfully!")
+            
+            st.download_button(
+                label="📥 Download PDF",
+                data=pdf_data,
+                file_name=filename,
+                mime="application/pdf",
+                help="Click to download the PDF to your computer"
+            )
+            
+            st.info(f"**File will download as:** `{filename}`")
 
 # ---------- PAGE: Change Password ----------
 elif menu == "🔐 Change Password":
