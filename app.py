@@ -254,7 +254,7 @@ def calculate_total_owed(loan_id):
         return 0, 0, 0
 
 # ---------- INITIALIZE SUPABASE TABLES ----------
-def init_supabase_tables():
+'''def init_supabase_tables():
     """Initialize Supabase tables if they don't exist"""
     # Note: Tables should be created manually in Supabase dashboard
     # This function just ensures basic data exists
@@ -275,7 +275,7 @@ def init_supabase_tables():
         st.error(f"Error initializing Supabase: {e}")
 
 # Initialize tables
-init_supabase_tables()
+init_supabase_tables()'''
 
 # ---------- CORE LOGIC ----------
 def calculate_interest(principal):
@@ -840,7 +840,6 @@ def login_page():
             st.info("Set your business name after logging in")
 
 def logout():
-    """Logout from Supabase Auth"""
     try:
         supabase_client.auth.sign_out()
     except:
@@ -1662,11 +1661,16 @@ elif menu == "🧾 PDF Export":
 elif menu == "🔐 Change Password":
     page_header("Change Password")
     
-    st.subheader("Change your password or username")
+    st.subheader("Change your password or email")
+    
+    # Get current user info
+    current_email = st.session_state.user  # This should be the email from Supabase Auth
     
     with st.form("change_password"):
+        st.info(f"**Current email:** {current_email}")
+        
         current_pw = st.text_input("Current password", type="password")
-        new_username = st.text_input("New username (optional)", value=st.session_state.user)
+        new_email = st.text_input("New email (optional)", value=current_email)
         new_pw = st.text_input("New password", type="password")
         confirm_pw = st.text_input("Confirm new password", type="password")
         
@@ -1675,40 +1679,88 @@ elif menu == "🔐 Change Password":
                 st.error("Current password is required")
             elif new_pw and new_pw != confirm_pw:
                 st.error("New passwords do not match")
+            elif new_pw and len(new_pw) < 6:
+                st.error("New password must be at least 6 characters")
             else:
-                # Verify current password
-                users_data = supabase_client.table("users").select("*").eq("username", st.session_state.user).execute()
-                
-                if not users_data.data or users_data.data[0]["password"] != hash_pw(current_pw):
-                    st.error("Current password is incorrect")
-                else:
+                try:
+                    # First, verify current password by trying to re-authenticate
                     try:
-                        # Check if username already exists (if changing username)
-                        if new_username != st.session_state.user:
-                            existing_user = supabase_client.table("users").select("*").eq("username", new_username).execute()
-                            if existing_user.data:
-                                st.error("Username already exists. Please choose a different username.")
-                                st.stop()
-                        
-                        # Update credentials
-                        if new_pw:
-                            supabase_client.table("users").update({
-                                "username": new_username,
-                                "password": hash_pw(new_pw)
-                            }).eq("username", st.session_state.user).execute()
-                        else:
-                            # Only update username
-                            supabase_client.table("users").update({
-                                "username": new_username
-                            }).eq("username", st.session_state.user).execute()
-                        
-                        # Update session state
-                        st.session_state.user = new_username
-                        
-                        st.success("✅ Credentials updated successfully")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error updating credentials: {str(e)}")
+                        # This verifies the current password is correct
+                        supabase_client.auth.sign_in_with_password({
+                            "email": current_email,
+                            "password": current_pw
+                        })
+                    except Exception as auth_error:
+                        st.error("Current password is incorrect")
+                        st.stop()
+                    
+                    # Update email if changed
+                    if new_email != current_email:
+                        try:
+                            supabase_client.auth.update_user({
+                                "email": new_email
+                            })
+                            st.session_state.user = new_email
+                            st.success("✅ Email updated successfully")
+                        except Exception as email_error:
+                            if "already registered" in str(email_error):
+                                st.error("This email is already registered to another account")
+                            else:
+                                st.error(f"Error updating email: {str(email_error)}")
+                            st.stop()
+                    
+                    # Update password if provided
+                    if new_pw:
+                        try:
+                            supabase_client.auth.update_user({
+                                "password": new_pw
+                            })
+                            st.success("✅ Password updated successfully")
+                        except Exception as pw_error:
+                            st.error(f"Error updating password: {str(pw_error)}")
+                            st.stop()
+                    
+                    # Show success message
+                    if new_email != current_email and new_pw:
+                        st.success("✅ Email and password updated successfully! Please login again.")
+                    elif new_email != current_email:
+                        st.success("✅ Email updated successfully!")
+                    elif new_pw:
+                        st.success("✅ Password updated successfully!")
+                    else:
+                        st.info("No changes were made")
+                    
+                    # If email was changed, suggest re-login
+                    if new_email != current_email:
+                        st.warning("Since you changed your email, you might need to login again on your next visit.")
+                    
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"Error updating credentials: {str(e)}")
+    
+    # Additional security options
+    with st.expander("🔒 Advanced Security Options"):
+        st.markdown("""
+        **Password Requirements:**
+        - At least 6 characters
+        - Case sensitive
+        
+        **Security Notes:**
+        - Passwords are encrypted by Supabase
+        - Never share your password
+        - Use a strong, unique password
+        """)
+        
+        # Option to reset password via email
+        if st.button("Send password reset email"):
+            try:
+                supabase_client.auth.reset_password_for_email(current_email, {
+                    "redirect_to": f"{st.secrets.SUPABASE_URL}/auth/confirm"
+                })
+                st.success("📧 Password reset email sent! Check your inbox.")
+            except Exception as e:
+                st.error(f"Error sending reset email: {str(e)}")
 
 # ---------- PAGE: Logout ----------
 elif menu == "🚪 Logout":
@@ -1721,4 +1773,5 @@ elif menu == "🚪 Logout":
 # ---------- END ----------
 update_loan_statuses()
 daily_backup()
+
 
