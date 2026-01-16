@@ -1527,7 +1527,7 @@ elif menu == "📆 Monthly Overview":
     loans_list = get_loans_simple_view()
     if loans_list:
         monthly_df = pd.DataFrame(loans_list)
-        monthly_df['month'] = monthly_df['due_date'].str[:7]  # Extract YYYY-MM
+        monthly_df['month'] = pd.to_datetime(monthly_df['loan_date']).dt.strftime('%B %Y') # Extract YYYY-MM
         
         if not monthly_df.empty:
             months = monthly_df["month"].unique().tolist()
@@ -1936,3 +1936,4 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
+
