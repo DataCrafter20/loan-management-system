@@ -99,9 +99,12 @@ def daily_backup():
 # Helper function to get current user ID
 def get_current_user_id():
     """Get current user ID from Supabase auth session"""
-    if "auth_session" in st.session_state:
-        return st.session_state.auth_session.user.id
-    return None
+    try:
+        if "auth_session" in st.session_state and st.session_state.auth_session:
+            return st.session_state.auth_session.user.id
+        return None
+    except:
+        return None
 
 # ---------- SUPABASE DB OPERATIONS ----------
 def execute_query(sql, params=None):
@@ -219,6 +222,12 @@ def set_setting(key, value):
         return False
 
 # ---------- CORE LOGIC FUNCTIONS WITH USER ISOLATION ----------
+
+def safe_update_loan_statuses():
+    """Safely update loan statuses only when user is logged in"""
+    if "auth_session" in st.session_state and st.session_state.auth_session:
+        return update_loan_statuses()
+    return False
 
 def calculate_interest(principal):
     """Calculate 40% interest on principal"""
@@ -475,6 +484,11 @@ def check_and_add_overdue_interest():
 
 def update_loan_statuses():
     """Update status for all loans with thread safety"""
+    # Don't run if no user is logged in
+    user_id = get_current_user_id()
+    if not user_id:
+        return False  # Silently return, no error
+    
     # Acquire lock to prevent concurrent updates
     if not loan_status_lock.acquire(blocking=False):
         # Another update is already running, skip this one
@@ -486,13 +500,13 @@ def update_loan_statuses():
         # Add a small delay to prevent rapid consecutive calls
         time.sleep(0.5)
         
-        check_and_add_overdue_interest()
+        # Only check overdue interest if user is logged in
+        try:
+            check_and_add_overdue_interest()
+        except:
+            pass  # Silently continue
         
         # Get all loans for current user only
-        user_id = get_current_user_id()
-        if not user_id:
-            return False
-        
         loans_data = supabase_client.table("loans_new").select("*").eq("user_id", user_id).execute()
         
         for loan in loans_data.data:
@@ -516,9 +530,12 @@ def update_loan_statuses():
         
         return True
     except Exception as e:
-        # Only show error if it's not a resource locking issue
-        if "temporarily unavailable" not in str(e) and "Errno 11" not in str(e):
-            st.error(f"Error updating loan statuses: {e}")
+        # Only show error if it's not a NoneType or resource issue
+        error_msg = str(e)
+        if "NoneType" not in error_msg and "temporarily unavailable" not in error_msg and "Errno 11" not in error_msg:
+            # Don't show error on login page if no session
+            if "auth_session" in st.session_state and st.session_state.auth_session:
+                st.error(f"Error updating loan statuses: {e}")
         return False
     finally:
         # Always release the lock
@@ -527,8 +544,9 @@ def update_loan_statuses():
         except:
             pass
 
+
 # Run status updates on start
-update_loan_statuses()
+safe_update_loan_statuses()
 
 # ---------- VIEW FUNCTIONS ----------
 def get_loans_simple_view():
@@ -733,7 +751,7 @@ def update_loan(loan_id, new_principal, new_due_date):
                 "is_paid": 0
             }).execute()
         
-        update_loan_statuses()
+        safe_update_loan_statuses()
         return True, "Loan updated successfully"
     except Exception as e:
         return False, f"Error updating loan: {str(e)}"
@@ -1353,7 +1371,7 @@ elif menu == "💰 Loans":
                                 "is_paid": 0
                             })
                             
-                            update_loan_statuses()
+                            safe_update_loan_statuses()
                             st.success(f"✅ Loan recorded (Total: R {total:.2f})")
                             st.rerun()
                     except Exception as e:
@@ -1364,7 +1382,7 @@ elif menu == "💰 Loans":
     st.subheader("All loans (full details)")
     
     # Update statuses before showing
-    update_loan_statuses()
+    safe_update_loan_statuses()
     
     # Refresh loans data
     loans_list = get_loans_simple_view()
@@ -1385,7 +1403,7 @@ elif menu == "💳 Payments":
     page_header("Payments")
     
     # Update statuses first
-    update_loan_statuses()
+    safe_update_loan_statuses()
     
     # Get active loans for dropdown
     try:
@@ -1503,7 +1521,7 @@ elif menu == "📆 Monthly Overview":
     page_header("Monthly Overview")
     st.caption("Grouped by month & group. Shows each client, all loan info & statuses")
     
-    update_loan_statuses()
+    safe_update_loan_statuses()
 
     # Get loans data
     loans_list = get_loans_simple_view()
@@ -1551,7 +1569,7 @@ elif menu == "🔍 Search":
     page_header("Search")
     st.markdown("Search by Client, Group, or Due Date")
     
-    update_loan_statuses()
+    safe_update_loan_statuses()
     
     search_type = st.radio("Search by", ["Client", "Group", "Due Date"], horizontal=True)
     
@@ -1629,7 +1647,7 @@ elif menu == "🧾 PDF Export":
             st.error("Select a group")
         else:
             # Update statuses before generating report
-            update_loan_statuses()
+            safe_update_loan_statuses()
             
             if export_type == "Client Statement":
                 loans_list = get_loans_simple_view()
@@ -1913,5 +1931,8 @@ elif menu == "🚪 Logout":
 
 
 # ---------- END ----------
-update_loan_statuses()
+
+# Only update loan statuses if user is logged in
+if "auth_session" in st.session_state and st.session_state.auth_session:
+    safe_update_loan_statuses()
 daily_backup()
