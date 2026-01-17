@@ -34,6 +34,14 @@ def init_supabase():
     except Exception as e:
         st.error(f"Failed to connect to Supabase: {e}")
         return None
+        
+def cleanup_orphaned_profiles():
+    """Clean up orphaned user_profiles records on app start"""
+    try:
+        # This is a background task - run occasionally
+        supabase_client.rpc('cleanup_orphaned_profiles').execute()
+    except:
+        pass  # Silent fail - not critical
 
 supabase_client = init_supabase()
 
@@ -915,9 +923,16 @@ def login_page():
                             }
                         })
                         
+                        # In your signup function, modify the success logic:
                         if signup_response.user:
-                            st.success("✅ Account created successfully! Please check your email to confirm.")
-                            st.info("📧 Check your inbox for the verification email. Click the link to activate your account.")
+                            # Manually set the user as confirmed in session
+                            st.session_state.auth_session = signup_response
+                            st.session_state.user = signup_response.user.email
+                            st.session_state.user_confirmed = True  # Custom flag
+                            
+                            st.success("✅ Account created and logged in successfully!")
+                            st.balloons()
+                            st.rerun()  # Immediately redirect to dashboard
                         else:
                             st.error("Signup failed. Please try again.")
                     except Exception as e:
@@ -1923,5 +1938,6 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
+
 
 
