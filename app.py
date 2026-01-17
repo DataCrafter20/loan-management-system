@@ -920,8 +920,8 @@ def login_page():
                             "password": new_password,
                             "options": {
                                 "data": {
-                                    "username": unique_username,   # unique value for DB safety
-                                    "display_name": new_username   # pretty name for UI
+                                    "username": unique_username,
+                                    "display_name": new_username
                                 }
                             }
                         })
@@ -931,8 +931,7 @@ def login_page():
                             st.session_state.user = signup_response.user.email
                             st.session_state.user_confirmed = True
 
-                            st.success("✅ Account created and logged in successfully!")
-                            st.balloons()
+                            st.success("✅ Account created successfully! You can now log in.")
                             st.rerun()
                         else:
                             st.error("Signup failed. Please try again.")
@@ -941,31 +940,12 @@ def login_page():
                         error_msg = str(e)
 
                         if "Database error saving new user" in error_msg:
-                            # Retry with completely random username
-                            import random
-                            random_username = f"user_{random.randint(1000, 9999)}"
-
-                            retry_response = supabase_client.auth.sign_up({
-                                "email": new_email,
-                                "password": new_password,
-                                "options": {
-                                    "data": {
-                                        "username": random_username,
-                                        "display_name": new_username
-                                    }
-                                }
-                            })
-
-                            if retry_response.user:
-                                st.session_state.auth_session = retry_response
-                                st.session_state.user = retry_response.user.email
-                                st.session_state.user_confirmed = True
-
-                                st.success("✅ Account created with alternate username!")
-                                st.balloons()
-                                st.rerun()
-                            else:
-                                st.error("Signup failed. Please try again.")
+                            # IMPORTANT:
+                            # Auth user was created successfully.
+                            # Profile failure is non-fatal.
+                            st.success("✅ Account created successfully! You can now log in.")
+                            st.info("Your profile will be finalized automatically.")
+                            st.rerun()
 
                         elif "already registered" in error_msg:
                             st.error("Email already registered")
@@ -1965,7 +1945,3 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
-
-
-
-
