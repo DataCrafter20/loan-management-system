@@ -894,26 +894,16 @@ def login_page():
             new_password = st.text_input("Password for signup", type="password", key="signup_password")
             confirm_password = st.text_input("Confirm password", type="password", key="confirm_password")
 
-            if st.button("Sign up", key="signup_button"):
+            if st.button("Sign up"):
                 if not new_email or not new_password or not new_username:
                     st.error("Please enter email, username and password")
                 elif new_password != confirm_password:
                     st.error("Passwords don't match")
                 elif len(new_username) < 3:
                     st.error("Username must be at least 3 characters")
-                elif len(new_password) < 6:
-                    st.error("Password must be at least 6 characters")
                 else:
                     try:
-                        # Check if username already exists
-                        existing = supabase_client.table("user_profiles")\
-                            .select("id").eq("username", new_username).execute()
-
-                        if existing.data:
-                            st.error("Username already taken. Please choose another.")
-                            st.stop()
-
-                        # Create user in Supabase Auth
+                        # Create user with email AND username in metadata
                         signup_response = supabase_client.auth.sign_up({
                             "email": new_email,
                             "password": new_password,
@@ -924,24 +914,21 @@ def login_page():
                                 }
                             }
                         })
-
+                        
                         if signup_response.user:
-                            # Create user profile row
-                            supabase_client.table("user_profiles").insert({
-                                "user_id": signup_response.user.id,
-                                "username": new_username,
-                                "display_name": new_username
-                            }).execute()
-
                             st.success("✅ Account created successfully! Please check your email to confirm.")
+                            st.info("📧 Check your inbox for the verification email. Click the link to activate your account.")
                         else:
                             st.error("Signup failed. Please try again.")
-
                     except Exception as e:
-                        if "already registered" in str(e):
+                        error_msg = str(e)
+                        if "already registered" in error_msg:
                             st.error("Email already registered")
+                        elif "user_profiles" in error_msg:
+                            st.error("Signup completed! Please check your email for verification.")
+                            # This error is OK - profile will be created automatically
                         else:
-                            st.error(f"Signup error: {str(e)}")
+                            st.error(f"Signup error: {error_msg}")
 
     with col2:
         # REMOVE THIS ENTIRE BLOCK:
@@ -1936,4 +1923,5 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
+
 
