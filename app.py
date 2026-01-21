@@ -895,62 +895,82 @@ def login_page():
                 else:
                     st.error(f"Login error: {error_msg}")
         
-        # Sign up option
-        with st.expander("Don't have an account? Sign up"):
-            new_email = st.text_input("Email for signup", key="signup_email")
-            new_username = st.text_input("Choose a username", key="signup_username")
-            new_password = st.text_input("Password for signup", type="password", key="signup_password")
-            confirm_password = st.text_input("Confirm password", type="password", key="confirm_password")
+                # Sign up option
+                with st.expander("Don't have an account? Sign up"):
+                    new_email = st.text_input("Email for signup", key="signup_email")
+                    new_username = st.text_input("Choose a username", key="signup_username")
+                    new_password = st.text_input("Password for signup", type="password", key="signup_password")
+                    confirm_password = st.text_input("Confirm password", type="password", key="confirm_password")
 
-            if st.button("Sign up"):
-                if not new_email or not new_password or not new_username:
-                    st.error("Please enter email, username and password")
-                elif new_password != confirm_password:
-                    st.error("Passwords don't match")
-                elif len(new_username) < 3:
-                    st.error("Username must be at least 3 characters")
-                else:
-                    try:
-                        # TEMPORARY: Generate a unique username with timestamp
-                        import time
-                        unique_username = f"{new_username}_{int(time.time())}"
-
-                        signup_response = supabase_client.auth.sign_up({
-                            "email": new_email,
-                            "password": new_password,
-                            "options": {
-                                "data": {
-                                    "username": unique_username,
-                                    "display_name": new_username
-                                }
-                            }
-                        })
-
-                        if signup_response.user:
-                            st.session_state.auth_session = signup_response
-                            st.session_state.user = signup_response.user.email
-                            st.session_state.user_confirmed = True
-
-                            st.success("✅ Account created successfully! You can now log in.")
-                            st.rerun()
+                    if st.button("Sign up"):
+                        if not new_email or not new_password or not new_username:
+                            st.error("Please enter email, username and password")
+                        elif new_password != confirm_password:
+                            st.error("Passwords don't match")
+                        elif len(new_username) < 3:
+                            st.error("Username must be at least 3 characters")
                         else:
-                            st.error("Signup failed. Please try again.")
+                            try:
+                                # First, check if username is already taken
+                                existing_profile = supabase_client.table("user_profiles")\
+                                    .select("*")\
+                                    .eq("username", new_username)\
+                                    .execute()
+                                
+                                if existing_profile.data:
+                                    st.error("Username already taken. Please choose another.")
+                                    st.stop()
+                                
+                                # Create user in Supabase Auth
+                                signup_response = supabase_client.auth.sign_up({
+                                    "email": new_email,
+                                    "password": new_password,
+                                    "options": {
+                                        "data": {
+                                            "username": new_username,
+                                            "display_name": new_username
+                                        }
+                                    }
+                                })
 
-                    except Exception as e:
-                        error_msg = str(e)
+                                if signup_response.user:
+                                    # IMPORTANT: We need to wait for the auth.user_created() trigger
+                                    # Then manually create profile if trigger fails
+                                    import time
+                                    time.sleep(1)  # Brief pause for trigger
+                                    
+                                    # Check if profile was created by trigger
+                                    user_id = signup_response.user.id
+                                    check_profile = supabase_client.table("user_profiles")\
+                                        .select("*")\
+                                        .eq("user_id", user_id)\
+                                        .execute()
+                                    
+                                    if not check_profile.data:
+                                        # Create profile manually
+                                        supabase_client.table("user_profiles").insert({
+                                            "user_id": user_id,
+                                            "email": new_email,
+                                            "username": new_username,
+                                            "display_name": new_username
+                                        }).execute()
+                                    
+                                    st.success("✅ Account created successfully! You can now log in.")
+                                    st.info("Please use the login form above with your email and password.")
+                                    
+                                else:
+                                    st.error("Signup failed. Please try again.")
 
-                        if "Database error saving new user" in error_msg:
-                            # IMPORTANT:
-                            # Auth user was created successfully.
-                            # Profile failure is non-fatal.
-                            st.success("✅ Account created successfully! You can now log in.")
-                            st.info("Your profile will be finalized automatically.")
-                            st.rerun()
-
-                        elif "already registered" in error_msg:
-                            st.error("Email already registered")
-                        else:
-                            st.error(f"Signup error: {error_msg}")
+                            except Exception as e:
+                                error_msg = str(e)
+                                if "already registered" in error_msg.lower():
+                                    st.error("Email already registered")
+                                elif "password" in error_msg.lower():
+                                    st.error("Password too weak. Use at least 6 characters.")
+                                elif "username" in error_msg.lower():
+                                    st.error("Username already taken")
+                                else:
+                                    st.error(f"Signup error: {error_msg}")
 
     with col2:
         # REMOVE THIS ENTIRE BLOCK:
@@ -1945,3 +1965,4 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
+
