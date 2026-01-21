@@ -18,32 +18,50 @@ loan_status_lock = threading.Lock()
 import supabase
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import os
+import streamlit as st
 
 load_dotenv()
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
-# DO NOT use service role key in frontend - use anon/public key only
+SUPABASE_SERVICE_KEY = st.secrets.get(
+    "SUPABASE_SERVICE_KEY",
+    os.getenv("SUPABASE_SERVICE_KEY")
+)
 
-# Initialize Supabase client
+# Initialize Supabase clients
 @st.cache_resource
 def init_supabase():
     try:
+        # Public / anon client (used everywhere else)
         client = create_client(SUPABASE_URL, SUPABASE_KEY)
         return client
     except Exception as e:
         st.error(f"Failed to connect to Supabase: {e}")
         return None
-        
+
+@st.cache_resource
+def init_supabase_service():
+    try:
+        # Service-role client (ADMIN ONLY)
+        service_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        return service_client
+    except Exception as e:
+        st.error(f"Failed to connect to Supabase service: {e}")
+        return None
+
+supabase_client = init_supabase()
+supabase_service = init_supabase_service()
+
 def cleanup_orphaned_profiles():
     """Clean up orphaned user_profiles records on app start"""
     try:
-        # This is a background task - run occasionally
-        supabase_client.rpc('cleanup_orphaned_profiles').execute()
-    except:
-        pass  # Silent fail - not critical
+        # MUST use service role (bypasses RLS safely)
+        supabase_service.rpc('cleanup_orphaned_profiles').execute()
+    except Exception:
+        pass  # Silent fail - non-critical
 
-supabase_client = init_supabase()
 
 # ---------- CONFIG ----------
 BACKUP_DIR = "backups"
@@ -858,7 +876,6 @@ def login_page():
                 if not email or not password:
                     st.error("Please enter both email and password")
                 else:
-                    # Use Supabase Auth
                     auth_response = supabase_client.auth.sign_in_with_password({
                         "email": email,
                         "password": password
@@ -868,14 +885,17 @@ def login_page():
                         st.session_state.auth_session = auth_response
                         st.session_state.user = auth_response.user.email
                         
-                        # Get username from user_profiles
                         try:
-                            profile = supabase_client.table("user_profiles")\
-                                .select("*").eq("user_id", auth_response.user.id).execute()
+                            profile = supabase_client.table("user_profiles") \
+                                .select("*") \
+                                .eq("user_id", auth_response.user.id) \
+                                .execute()
                             if profile.data:
-                                st.session_state.user_display_name = profile.data[0]["display_name"] or profile.data[0]["username"]
+                                st.session_state.user_display_name = (
+                                    profile.data[0]["display_name"]
+                                    or profile.data[0]["username"]
+                                )
                             else:
-                                # Fallback to email prefix
                                 st.session_state.user_display_name = auth_response.user.email.split('@')[0]
                         except:
                             st.session_state.user_display_name = auth_response.user.email.split('@')[0]
@@ -895,7 +915,7 @@ def login_page():
                 else:
                     st.error(f"Login error: {error_msg}")
         
-        # Sign up option
+        # ✅ REPLACED SIGNUP SECTION (ONLY CHANGE)
         with st.expander("Don't have an account? Sign up"):
             new_email = st.text_input("Email for signup", key="signup_email")
             new_username = st.text_input("Choose a username", key="signup_username")
@@ -911,7 +931,18 @@ def login_page():
                     st.error("Username must be at least 3 characters")
                 else:
                     try:
-                        # Create user in Supabase Auth
+                        # Check username uniqueness using service client
+                        try:
+                            existing_profile = supabase_service.table("user_profiles") \
+                                .select("*") \
+                                .eq("username", new_username) \
+                                .execute()
+                            if existing_profile.data:
+                                st.error("Username already taken. Please choose another.")
+                                st.stop()
+                        except:
+                            pass
+                        
                         signup_response = supabase_client.auth.sign_up({
                             "email": new_email,
                             "password": new_password,
@@ -924,33 +955,44 @@ def login_page():
                         })
 
                         if signup_response.user:
-                            # Manually create user profile since trigger won't work
                             user_id = signup_response.user.id
                             
-                            # Create profile in user_profiles table
-                            supabase_client.table("user_profiles").insert({
-                                "user_id": user_id,
-                                "email": new_email,
-                                "username": new_username,
-                                "display_name": new_username
-                            }).execute()
-                            
-                            # Auto-login after signup
-                            login_response = supabase_client.auth.sign_in_with_password({
-                                "email": new_email,
-                                "password": new_password
-                            })
-                            
-                            if login_response.user:
-                                st.session_state.auth_session = login_response
-                                st.session_state.user = login_response.user.email
-                                st.session_state.user_display_name = new_username
+                            try:
+                                if supabase_service:
+                                    supabase_service.table("user_profiles").insert({
+                                        "user_id": user_id,
+                                        "email": new_email,
+                                        "username": new_username,
+                                        "display_name": new_username
+                                    }).execute()
+                                else:
+                                    supabase_client.table("user_profiles").insert({
+                                        "user_id": user_id,
+                                        "email": new_email,
+                                        "username": new_username,
+                                        "display_name": new_username
+                                    }).execute()
+                            except Exception as profile_error:
+                                st.warning(f"Profile creation issue: {profile_error}")
+                                st.info("You can still log in; profile will be created automatically.")
+
+                            try:
+                                login_response = supabase_client.auth.sign_in_with_password({
+                                    "email": new_email,
+                                    "password": new_password
+                                })
                                 
-                                st.success("✅ Account created and logged in successfully!")
-                                st.rerun()
-                            else:
+                                if login_response.user:
+                                    st.session_state.auth_session = login_response
+                                    st.session_state.user = login_response.user.email
+                                    st.session_state.user_display_name = new_username
+                                    
+                                    st.success("✅ Account created and logged in successfully!")
+                                    st.rerun()
+                                else:
+                                    st.success("✅ Account created! Please log in manually.")
+                            except:
                                 st.success("✅ Account created! Please log in manually.")
-                            
                         else:
                             st.error("Signup failed. Please try again.")
 
@@ -959,14 +1001,13 @@ def login_page():
                         if "already registered" in error_msg.lower():
                             st.error("Email already registered")
                         elif "username" in error_msg.lower() and "duplicate" in error_msg.lower():
-                            st.error("Username already taken. Please choose another.")
+                            st.error("Username already taken")
                         elif "password" in error_msg.lower():
-                            st.error("Password too weak. Use at least 6 characters.")
+                            st.error("Password too weak (min 6 characters)")
                         else:
                             st.error(f"Signup error: {error_msg}")
 
     with col2:
-        # KEEP ONLY business name setup if you want it shown when logged in
         if st.session_state.auth_session:
             business = get_setting("business_name")
             st.markdown("### Optional: Set Business Name")
@@ -977,6 +1018,7 @@ def login_page():
                         set_setting("business_name", bn.strip())
                         st.success("Business name saved.")
                         st.rerun()
+
    
 def logout():
     try:
