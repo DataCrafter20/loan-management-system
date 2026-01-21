@@ -25,42 +25,27 @@ load_dotenv()
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
-SUPABASE_SERVICE_KEY = st.secrets.get(
-    "SUPABASE_SERVICE_KEY",
-    os.getenv("SUPABASE_SERVICE_KEY")
-)
+# DO NOT use service role key in frontend - use anon/public key only
 
-# Initialize Supabase clients
+# Initialize Supabase client (ANON KEY ONLY)
 @st.cache_resource
 def init_supabase():
     try:
-        # Public / anon client (used everywhere else)
         client = create_client(SUPABASE_URL, SUPABASE_KEY)
         return client
     except Exception as e:
         st.error(f"Failed to connect to Supabase: {e}")
         return None
 
-@st.cache_resource
-def init_supabase_service():
-    try:
-        # Service-role client (ADMIN ONLY)
-        service_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-        return service_client
-    except Exception as e:
-        st.error(f"Failed to connect to Supabase service: {e}")
-        return None
-
-supabase_client = init_supabase()
-supabase_service = init_supabase_service()
-
 def cleanup_orphaned_profiles():
     """Clean up orphaned user_profiles records on app start"""
     try:
-        # MUST use service role (bypasses RLS safely)
-        supabase_service.rpc('cleanup_orphaned_profiles').execute()
-    except Exception:
-        pass  # Silent fail - non-critical
+        supabase_client.rpc('cleanup_orphaned_profiles').execute()
+    except:
+        pass  # Silent fail - not critical
+
+supabase_client = init_supabase()
+
 
 
 # ---------- CONFIG ----------
@@ -1996,5 +1981,6 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
+
 
 
