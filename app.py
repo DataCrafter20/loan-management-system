@@ -10,6 +10,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from dateutil.relativedelta import relativedelta
 import threading
 import time
+import functools
 
 # Global lock for loan status updates
 loan_status_lock = threading.Lock()
@@ -65,6 +66,19 @@ INTEREST_RATE = 0.40  # 40% interest rate
 
 st.set_page_config(page_title="💼 Loan Management System", layout="wide")
 
+# ---------- PERFORMANCE UTILITIES ----------
+def timer_decorator(func):
+    """Decorator to log function performance"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        end = time.time()
+        if "perf_logs" not in st.session_state:
+            st.session_state.perf_logs = {}
+        st.session_state.perf_logs[func.__name__] = end - start
+        return result
+    return wrapper
 
 # ---------- UTILITIES ----------
 def format_money(v):
@@ -150,21 +164,11 @@ def get_authenticated_client():
     
     return supabase_client
 
-# ---------- SUPABASE DB OPERATIONS ----------
-def execute_query(sql, params=None):
-    """Execute raw SQL query on Supabase (for views and complex queries)"""
-    try:
-        # Use Supabase's REST API for data operations
-        # For complex queries, we'll use the REST API methods
-        return None
-    except Exception as e:
-        st.error(f"Query error: {e}")
-        return None
-
-# ---------- SUPABASE DB OPERATIONS WITH USER ISOLATION ----------
-
-def get_table_data(table_name, filters=None, order_by=None, limit=None):
-    """Get data from Supabase table with user isolation"""
+# ---------- CACHED DATA FUNCTIONS ----------
+@timer_decorator
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def cached_get_table_data(table_name, filters=None, order_by=None, limit=None):
+    """Cached version of get_table_data"""
     try:
         user_id = get_current_user_id()
         if not user_id:
@@ -189,52 +193,90 @@ def get_table_data(table_name, filters=None, order_by=None, limit=None):
         st.error(f"Error fetching from {table_name}: {e}")
         return []
 
-def insert_table_data(table_name, data):
-    """Insert data into Supabase table with user isolation"""
+@timer_decorator
+@st.cache_data(ttl=180)  # Cache for 3 minutes - shorter TTL for frequently changing data
+def cached_get_loans_simple_view():
+    """Cached version of get_loans_simple_view - this is the most expensive query"""
     try:
-        user_id = get_current_user_id()
-        if not user_id:
-            return None
-        
-        # Add user_id to all data
-        data_with_user = {**data, "user_id": user_id}
         client = get_authenticated_client()  # Use authenticated client
-        response = client.table(table_name).insert(data_with_user).execute()
-        return response.data[0] if response.data else None
+        loans_data = client.table("loans_new").select("*, clients(name, groups(name))").execute()
+        
+        results = []
+        for loan in loans_data.data:
+            loan_id = loan["id"]
+            client_name = loan["clients"]["name"] if loan.get("clients") else ""
+            group_name = loan["clients"]["groups"]["name"] if loan.get("clients") and loan["clients"].get("groups") else ""
+            
+            # Calculate interest
+            interest_data = client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan_id).eq("is_paid", 0).execute()
+            interest = sum(item["interest_amount"] for item in interest_data.data)
+            
+            # Calculate paid amount
+            payments_data = client.table("payments_new").select("amount").eq("loan_id", loan_id).execute()
+            paid = sum(item["amount"] for item in payments_data.data)
+            
+            total = loan["current_principal"] + interest
+            
+            results.append({
+                "id": loan_id,
+                "client": client_name,
+                "group_name": group_name,
+                "loan_date": loan["loan_date"],
+                "due_date": loan["current_due_date"],
+                "principal": loan["current_principal"],
+                "interest": interest,
+                "paid": paid,
+                "total": total,
+                "status": loan["status"]
+            })
+        
+        return results
     except Exception as e:
-        st.error(f"Error inserting into {table_name}: {e}")
-        return None
+        st.error(f"Error getting loans view: {e}")
+        return []
 
-def update_table_data(table_name, id_value, data):
-    """Update data in Supabase table with user isolation"""
+@timer_decorator
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def cached_get_payments_simple_view(limit=20):
+    """Cached version of get_payments_simple_view"""
     try:
-        user_id = get_current_user_id()
-        if not user_id:
-            return None
-        
         client = get_authenticated_client()  # Use authenticated client
-        response = client.table(table_name).update(data).eq("id", id_value).eq("user_id", user_id).execute()
-        return response.data[0] if response.data else None
-    except Exception as e:
-        st.error(f"Error updating {table_name}: {e}")
-        return None
-
-def delete_table_data(table_name, id_value):
-    """Delete data from Supabase table with user isolation"""
-    try:
-        user_id = get_current_user_id()
-        if not user_id:
-            return False
+        payments_data = client.table("payments_new").select("*, loans_new(*, clients(*, groups(*)))").order("payment_date", desc=True).limit(limit).execute()
         
-        client = get_authenticated_client()  # Use authenticated client
-        response = client.table(table_name).delete().eq("id", id_value).eq("user_id", user_id).execute()
-        return True
+        results = []
+        for payment in payments_data.data:
+            loan = payment.get("loans_new", {})
+            client_data = loan.get("clients", {})
+            group = client_data.get("groups", {})
+            
+            # Calculate interest for this loan
+            interest_data = client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan.get("id")).eq("is_paid", 0).execute()
+            interest = sum(item["interest_amount"] for item in interest_data.data)
+            
+            total = loan.get("current_principal", 0) + interest
+            
+            results.append({
+                "client": client_data.get("name", ""),
+                "group_name": group.get("name", ""),
+                "loan_date": loan.get("loan_date", ""),
+                "due_date": loan.get("current_due_date", ""),
+                "principal": loan.get("current_principal", 0),
+                "interest": interest,
+                "paid": payment["amount"],
+                "total": total,
+                "payment_date": payment["payment_date"],
+                "status": loan.get("status", "")
+            })
+        
+        return results
     except Exception as e:
-        st.error(f"Error deleting from {table_name}: {e}")
-        return False
+        st.error(f"Error getting payments view: {e}")
+        return []
 
-def get_setting(key):
-    """Get setting from Supabase with user isolation"""
+@timer_decorator
+@st.cache_data(ttl=600)  # Cache for 10 minutes - settings don't change often
+def cached_get_setting(key):
+    """Cached version of get_setting"""
     try:
         user_id = get_current_user_id()
         # If no user is logged in (login page), don't query settings
@@ -252,6 +294,87 @@ def get_setting(key):
             st.error(f"Error getting setting {key}: {e}")
         return None
 
+# ---------- SUPABASE DB OPERATIONS ----------
+def execute_query(sql, params=None):
+    """Execute raw SQL query on Supabase (for views and complex queries)"""
+    try:
+        # Use Supabase's REST API for data operations
+        # For complex queries, we'll use the REST API methods
+        return None
+    except Exception as e:
+        st.error(f"Query error: {e}")
+        return None
+
+# ---------- SUPABASE DB OPERATIONS WITH USER ISOLATION ----------
+
+def get_table_data(table_name, filters=None, order_by=None, limit=None):
+    """Get data from Supabase table with user isolation - uses cached version"""
+    return cached_get_table_data(table_name, filters, order_by, limit)
+
+def insert_table_data(table_name, data):
+    """Insert data into Supabase table with user isolation"""
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return None
+        
+        # Add user_id to all data
+        data_with_user = {**data, "user_id": user_id}
+        client = get_authenticated_client()  # Use authenticated client
+        response = client.table(table_name).insert(data_with_user).execute()
+        
+        # Clear relevant caches after insert
+        if table_name == "loans_new":
+            st.cache_data.clear()  # Clear all data caches
+        elif table_name in ["clients", "groups", "payments_new", "loan_interest_history"]:
+            # Clear specific caches
+            st.cache_data.clear()
+        
+        return response.data[0] if response.data else None
+    except Exception as e:
+        st.error(f"Error inserting into {table_name}: {e}")
+        return None
+
+def update_table_data(table_name, id_value, data):
+    """Update data in Supabase table with user isolation"""
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return None
+        
+        client = get_authenticated_client()  # Use authenticated client
+        response = client.table(table_name).update(data).eq("id", id_value).eq("user_id", user_id).execute()
+        
+        # Clear caches after update
+        st.cache_data.clear()
+        
+        return response.data[0] if response.data else None
+    except Exception as e:
+        st.error(f"Error updating {table_name}: {e}")
+        return None
+
+def delete_table_data(table_name, id_value):
+    """Delete data from Supabase table with user isolation"""
+    try:
+        user_id = get_current_user_id()
+        if not user_id:
+            return False
+        
+        client = get_authenticated_client()  # Use authenticated client
+        response = client.table(table_name).delete().eq("id", id_value).eq("user_id", user_id).execute()
+        
+        # Clear caches after delete
+        st.cache_data.clear()
+        
+        return True
+    except Exception as e:
+        st.error(f"Error deleting from {table_name}: {e}")
+        return False
+
+def get_setting(key):
+    """Get setting from Supabase with user isolation - uses cached version"""
+    return cached_get_setting(key)
+
 def set_setting(key, value):
     """Set setting in Supabase with user isolation"""
     try:
@@ -267,6 +390,10 @@ def set_setting(key, value):
             client.table("settings").update({"value": value}).eq("key", key).eq("user_id", user_id).execute()
         else:
             client.table("settings").insert({"key": key, "value": value, "user_id": user_id}).execute()
+        
+        # Clear settings cache
+        st.cache_data.clear()
+        
         return True
     except Exception as e:
         st.error(f"Error setting {key}: {e}")
@@ -292,6 +419,7 @@ def get_next_due_date(current_due_date_str):
     next_due_date = current_due_date + relativedelta(months=1)
     return next_due_date.isoformat()
 
+@timer_decorator
 def calculate_total_owed(loan_id):
     """Calculate total amount owed for a loan (principal + unpaid interest) with user isolation"""
     try:
@@ -318,7 +446,6 @@ def calculate_total_owed(loan_id):
     except Exception as e:
         st.error(f"Error calculating total owed: {e}")
         return 0, 0, 0
-
 
 # ---------- CORE LOGIC ----------
 def calculate_interest(principal):
@@ -356,6 +483,7 @@ def calculate_total_owed(loan_id):
         st.error(f"Error calculating total owed: {e}")
         return 0, 0, 0
 
+@timer_decorator
 def process_payment(loan_id, payment_amount, payment_date):
     """Process a payment according to the new rules"""
     try:
@@ -455,13 +583,16 @@ def process_payment(loan_id, payment_amount, payment_date):
             "status": new_status
         }).eq("id", loan_id).eq("user_id", user_id).execute()
 
+        # Clear caches after payment
+        st.cache_data.clear()
+        
         return True, "Payment processed successfully"
 
     except Exception as e:
         return False, f"Error processing payment: {str(e)}"
 
 
- 
+@timer_decorator 
 def check_and_add_overdue_interest():
     """Check all loans and add interest for ALL missed due dates"""
     # Don't run if another update is in progress
@@ -537,6 +668,7 @@ def check_and_add_overdue_interest():
     return False
 
 
+@timer_decorator
 def update_loan_statuses():
     """Update status for all loans with thread safety"""
     # Don't run if no user is logged in
@@ -606,82 +738,15 @@ safe_update_loan_statuses()
 
 # ---------- VIEW FUNCTIONS ----------
 def get_loans_simple_view():
-    """Get loans data in the simple view format"""
-    try:
-        client = get_authenticated_client()  # Use authenticated client
-        loans_data = client.table("loans_new").select("*, clients(name, groups(name))").execute()
-        
-        results = []
-        for loan in loans_data.data:
-            loan_id = loan["id"]
-            client_name = loan["clients"]["name"] if loan.get("clients") else ""
-            group_name = loan["clients"]["groups"]["name"] if loan.get("clients") and loan["clients"].get("groups") else ""
-            
-            # Calculate interest
-            interest_data = client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan_id).eq("is_paid", 0).execute()
-            interest = sum(item["interest_amount"] for item in interest_data.data)
-            
-            # Calculate paid amount
-            payments_data = client.table("payments_new").select("amount").eq("loan_id", loan_id).execute()
-            paid = sum(item["amount"] for item in payments_data.data)
-            
-            total = loan["current_principal"] + interest
-            
-            results.append({
-                "id": loan_id,
-                "client": client_name,
-                "group_name": group_name,
-                "loan_date": loan["loan_date"],
-                "due_date": loan["current_due_date"],
-                "principal": loan["current_principal"],
-                "interest": interest,
-                "paid": paid,
-                "total": total,
-                "status": loan["status"]
-            })
-        
-        return results
-    except Exception as e:
-        st.error(f"Error getting loans view: {e}")
-        return []
+    """Get loans data in the simple view format - uses cached version"""
+    return cached_get_loans_simple_view()
 
 def get_payments_simple_view(limit=20):
-    """Get payments data in the simple view format"""
-    try:
-        client = get_authenticated_client()  # Use authenticated client
-        payments_data = client.table("payments_new").select("*, loans_new(*, clients(*, groups(*)))").order("payment_date", desc=True).limit(limit).execute()
-        
-        results = []
-        for payment in payments_data.data:
-            loan = payment.get("loans_new", {})
-            client_data = loan.get("clients", {})
-            group = client_data.get("groups", {})
-            
-            # Calculate interest for this loan
-            interest_data = client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan.get("id")).eq("is_paid", 0).execute()
-            interest = sum(item["interest_amount"] for item in interest_data.data)
-            
-            total = loan.get("current_principal", 0) + interest
-            
-            results.append({
-                "client": client_data.get("name", ""),
-                "group_name": group.get("name", ""),
-                "loan_date": loan.get("loan_date", ""),
-                "due_date": loan.get("current_due_date", ""),
-                "principal": loan.get("current_principal", 0),
-                "interest": interest,
-                "paid": payment["amount"],
-                "total": total,
-                "payment_date": payment["payment_date"],
-                "status": loan.get("status", "")
-            })
-        
-        return results
-    except Exception as e:
-        st.error(f"Error getting payments view: {e}")
-        return []
+    """Get payments data in the simple view format - uses cached version"""
+    return cached_get_payments_simple_view(limit)
 
 # ---------- HELPER FUNCTIONS ----------
+@timer_decorator
 def can_delete_client(client_id):
     """Check if client can be deleted (no related loans)"""
     try:
@@ -692,6 +757,7 @@ def can_delete_client(client_id):
         st.error(f"Error checking client deletion: {e}")
         return False
 
+@timer_decorator
 def can_delete_group(group_id):
     """Check if group can be deleted (no related clients)"""
     try:
@@ -702,6 +768,7 @@ def can_delete_group(group_id):
         st.error(f"Error checking group deletion: {e}")
         return False
 
+@timer_decorator
 def delete_client_with_related_data(client_id):
     """Delete client and all related data"""
     try:
@@ -721,10 +788,14 @@ def delete_client_with_related_data(client_id):
         # Delete client
         client.table("clients").delete().eq("id", client_id).execute()
         
+        # Clear all caches
+        st.cache_data.clear()
+        
         return True, "Client and all related data deleted successfully"
     except Exception as e:
         return False, f"Error deleting client: {str(e)}"
 
+@timer_decorator
 def delete_group_with_related_data(group_id):
     """Delete group and all related data"""
     try:
@@ -741,10 +812,14 @@ def delete_group_with_related_data(group_id):
         # Delete group
         client.table("groups").delete().eq("id", group_id).execute()
         
+        # Clear all caches
+        st.cache_data.clear()
+        
         return True, "Group and all related data deleted successfully"
     except Exception as e:
         return False, f"Error deleting group: {str(e)}"
 
+@timer_decorator
 def update_client(client_id, new_name, new_group_id):
     """Update client information"""
     try:
@@ -753,10 +828,15 @@ def update_client(client_id, new_name, new_group_id):
             "name": new_name.strip(),
             "group_id": new_group_id
         }).eq("id", client_id).execute()
+        
+        # Clear caches
+        st.cache_data.clear()
+        
         return True, "Client updated successfully"
     except Exception as e:
         return False, f"Error updating client: {str(e)}"
 
+@timer_decorator
 def update_group(group_id, new_name, new_start_date, new_end_date):
     """Update group information"""
     try:
@@ -766,10 +846,15 @@ def update_group(group_id, new_name, new_start_date, new_end_date):
             "start_date": new_start_date.isoformat(),
             "end_date": new_end_date.isoformat()
         }).eq("id", group_id).execute()
+        
+        # Clear caches
+        st.cache_data.clear()
+        
         return True, "Group updated successfully"
     except Exception as e:
         return False, f"Error updating group: {str(e)}"
 
+@timer_decorator
 def update_loan(loan_id, new_principal, new_due_date):
     """Update loan information"""
     try:
@@ -814,10 +899,15 @@ def update_loan(loan_id, new_principal, new_due_date):
             }).execute()
         
         safe_update_loan_statuses()
+        
+        # Clear caches
+        st.cache_data.clear()
+        
         return True, "Loan updated successfully"
     except Exception as e:
         return False, f"Error updating loan: {str(e)}"
 
+@timer_decorator
 def delete_loan_with_related_data(loan_id):
     """Delete loan and all related data"""
     try:
@@ -830,6 +920,9 @@ def delete_loan_with_related_data(loan_id):
         
         # Delete loan
         client.table("loans_new").delete().eq("id", loan_id).execute()
+        
+        # Clear all caches
+        st.cache_data.clear()
         
         return True, "Loan and all related data deleted successfully"
     except Exception as e:
@@ -944,6 +1037,9 @@ def login_page():
                         except:
                             st.session_state.user_display_name = auth_response.user.email.split('@')[0]
                         
+                        # Clear all caches on login
+                        st.cache_data.clear()
+                        
                         st.success("Login successful!")
                         st.rerun()
                     else:
@@ -1032,6 +1128,9 @@ def login_page():
                                     st.session_state.user = login_response.user.email
                                     st.session_state.user_display_name = new_username
                                     
+                                    # Clear all caches on signup/login
+                                    st.cache_data.clear()
+                                    
                                     st.success("✅ Account created and logged in successfully!")
                                     st.rerun()
                                 else:
@@ -1072,6 +1171,8 @@ def logout():
         pass
     st.session_state.auth_session = None
     st.session_state.user = None
+    # Clear all caches on logout
+    st.cache_data.clear()
     st.rerun()
 
 # Check authentication
@@ -1135,6 +1236,10 @@ def page_header(page_name: str):
     
 # ---------- SIDEBAR NAV ----------
 st.sidebar.title(f"🏢 {business_name}" if business_name else "🏢 Menu")
+
+# Performance debug toggle
+show_performance = st.sidebar.checkbox("📊 Show Performance Stats", False)
+
 menu = st.sidebar.radio("Navigate", [
     "📘 Tutorial Dashboard",
     "📁 Groups",
@@ -1147,6 +1252,13 @@ menu = st.sidebar.radio("Navigate", [
     "🔐 Change Password",
     "🚪 Logout"
 ])
+
+# Show performance stats if enabled
+if show_performance and "perf_logs" in st.session_state and st.session_state.perf_logs:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Performance Metrics")
+    for func_name, duration in sorted(st.session_state.perf_logs.items(), key=lambda x: x[1], reverse=True)[:5]:
+        st.sidebar.metric(f"{func_name}", f"{duration:.3f}s")
 
 # ---------- PAGE: Tutorial Dashboard ----------
 if menu == "📘 Tutorial Dashboard":
@@ -1226,7 +1338,7 @@ if menu == "📘 Tutorial Dashboard":
 elif menu == "📁 Groups":
     page_header("Groups")
     
-    # Get groups data
+    # Get groups data (uses cached version)
     groups_data = get_table_data("groups", order_by="name")
     groups_df = pd.DataFrame(groups_data) if groups_data else pd.DataFrame()
     
@@ -1293,23 +1405,33 @@ elif menu == "📁 Groups":
 elif menu == "👤 Clients":
     page_header("Clients")
     
-    # Get groups data
+    # Get groups data (uses cached version)
     groups_data = get_table_data("groups", order_by="name")
     groups_df = pd.DataFrame(groups_data) if groups_data else pd.DataFrame()
     group_names = groups_df["name"].tolist() if not groups_df.empty else []
     
-    # Get clients data with group info
-    client = get_authenticated_client()  # Use authenticated client
-    clients_data = client.table("clients").select("*, groups(name)").order("name").execute()
-    clients_list = []
-    for client_data in clients_data.data:
-        clients_list.append({
-            "id": client_data["id"],
-            "name": client_data["name"],
-            "group_id": client_data["group_id"],
-            "group_name": client_data["groups"]["name"] if client_data.get("groups") else "No Group"
-        })
-    clients_df = pd.DataFrame(clients_list)
+    # Get clients data with group info (direct query with caching)
+    try:
+        # Store in session state to avoid repeated queries on same page
+        if "user_clients_data" not in st.session_state:
+            client = get_authenticated_client()  # Use authenticated client
+            clients_data = client.table("clients").select("*, groups(name)").order("name").execute()
+            st.session_state.user_clients_data = clients_data.data
+        else:
+            clients_data = type('obj', (object,), {'data': st.session_state.user_clients_data})
+        
+        clients_list = []
+        for client_data in clients_data.data:
+            clients_list.append({
+                "id": client_data["id"],
+                "name": client_data["name"],
+                "group_id": client_data["group_id"],
+                "group_name": client_data["groups"]["name"] if client_data.get("groups") else "No Group"
+            })
+        clients_df = pd.DataFrame(clients_list)
+    except Exception as e:
+        st.error(f"Error loading clients: {e}")
+        clients_df = pd.DataFrame()
     
     if not clients_df.empty:
         st.subheader("Edit or Delete Clients")
@@ -1340,6 +1462,9 @@ elif menu == "👤 Clients":
                                     new_group_id = new_group_id_result.data[0]["id"]
                                     success, message = update_client(client_data['id'], new_name, new_group_id)
                                     if success:
+                                        # Update session state
+                                        if "user_clients_data" in st.session_state:
+                                            del st.session_state.user_clients_data
                                         st.success(message)
                                         st.rerun()
                                     else:
@@ -1352,6 +1477,9 @@ elif menu == "👤 Clients":
                         if can_delete_client(client_data['id']):
                             success, message = delete_client_with_related_data(client_data['id'])
                             if success:
+                                # Update session state
+                                if "user_clients_data" in st.session_state:
+                                    del st.session_state.user_clients_data
                                 st.success(message)
                                 st.rerun()
                             else:
@@ -1379,6 +1507,9 @@ elif menu == "👤 Clients":
                             "name": cname.strip(),
                             "group_id": group_id
                         })
+                        # Update session state
+                        if "user_clients_data" in st.session_state:
+                            del st.session_state.user_clients_data
                         st.success("✅ Client added")
                         st.rerun()
                     except Exception as e:
@@ -1398,12 +1529,12 @@ elif menu == "👤 Clients":
 elif menu == "💰 Loans":
     page_header("Loans")
     
-    # Get clients for dropdown
+    # Get clients for dropdown (uses cached version)
     clients_data = get_table_data("clients", order_by="name")
     clients_df = pd.DataFrame(clients_data) if clients_data else pd.DataFrame()
     client_options = clients_df["name"].tolist() if not clients_df.empty else []
     
-    # Get loans data
+    # Get loans data (uses cached version)
     loans_list = get_loans_simple_view()
     loans_df = pd.DataFrame(loans_list) if loans_list else pd.DataFrame()
     
@@ -1498,7 +1629,7 @@ elif menu == "💰 Loans":
     # Update statuses before showing
     safe_update_loan_statuses()
     
-    # Refresh loans data
+    # Refresh loans data (uses cached version)
     loans_list = get_loans_simple_view()
     loans_df = pd.DataFrame(loans_list) if loans_list else pd.DataFrame()
     
@@ -1639,7 +1770,7 @@ elif menu == "📆 Monthly Overview":
     
     safe_update_loan_statuses()
 
-    # Get loans data
+    # Get loans data (uses cached version)
     loans_list = get_loans_simple_view()
     if loans_list:
         monthly_df = pd.DataFrame(loans_list)
@@ -1736,12 +1867,12 @@ elif menu == "🔍 Search":
 elif menu == "🧾 PDF Export":
     page_header("PDF Report")
     
-    # Get clients for selection
+    # Get clients for selection (uses cached version)
     clients_data = get_table_data("clients", order_by="name")
     clients_df = pd.DataFrame(clients_data) if clients_data else pd.DataFrame()
     client_names = clients_df["name"].tolist() if not clients_df.empty else []
     
-    # Get groups for selection
+    # Get groups for selection (uses cached version)
     groups_data = get_table_data("groups", order_by="name")
     groups_df = pd.DataFrame(groups_data) if groups_data else pd.DataFrame()
     group_names = groups_df["name"].tolist() if not groups_df.empty else []
@@ -2053,7 +2184,5 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
-
-
 
 
