@@ -347,6 +347,7 @@ AI Data Annotator | BSc Computer Science, Information Systems & Applied Mathemat
 
 ***THANK YOU🔥***
 
-### 🔗 **Live Demo:** [Click here to try InterestIQ](https://loan-management-system-memfdbgfntn5mnntsjrijm.streamlit.app)
+### 🔗 
+**Live Demo:** [Click here to try InterestIQ](https://loan-management-system-memfdbgfntn5mnntsjrijm.streamlit.app)
 
 ---
