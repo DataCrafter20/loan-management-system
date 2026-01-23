@@ -18,16 +18,14 @@ loan_status_lock = threading.Lock()
 import supabase
 from supabase import create_client, Client
 from dotenv import load_dotenv
-import os
-import streamlit as st
 
 load_dotenv()
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
-# DO NOT use service role key in frontend - use anon/public key only
+SUPABASE_SERVICE_KEY = st.secrets.get("SUPABASE_SERVICE_KEY", os.getenv("SUPABASE_SERVICE_KEY"))
 
-# Initialize Supabase client (ANON KEY ONLY)
+# Initialize base Supabase client (without auth)
 @st.cache_resource
 def init_supabase():
     try:
@@ -35,6 +33,18 @@ def init_supabase():
         return client
     except Exception as e:
         st.error(f"Failed to connect to Supabase: {e}")
+        return None
+
+# Initialize service client (for signup operations that bypass RLS)
+@st.cache_resource
+def init_supabase_service():
+    try:
+        service_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        return service_client
+    except Exception as e:
+        # Don't show error if service key isn't set
+        if SUPABASE_SERVICE_KEY:
+            st.error(f"Failed to connect to Supabase service: {e}")
         return None
 
 def cleanup_orphaned_profiles():
@@ -45,6 +55,7 @@ def cleanup_orphaned_profiles():
         pass  # Silent fail - not critical
 
 supabase_client = init_supabase()
+supabase_service = init_supabase_service()
 
 
 
@@ -117,6 +128,28 @@ def get_current_user_id():
     except:
         return None
 
+def get_authenticated_client():
+    """Get Supabase client with current user's session attached"""
+    if not supabase_client:
+        return None
+    
+    # Check if user is authenticated
+    if "auth_session" in st.session_state and st.session_state.auth_session:
+        try:
+            # Set the session on the client
+            supabase_client.auth.set_session(
+                st.session_state.auth_session.session.access_token,
+                st.session_state.auth_session.session.refresh_token
+            )
+        except Exception as e:
+            # If session is invalid, clear it
+            if "invalid" in str(e).lower() or "expired" in str(e).lower():
+                st.session_state.auth_session = None
+                st.session_state.user = None
+                st.rerun()
+    
+    return supabase_client
+
 # ---------- SUPABASE DB OPERATIONS ----------
 def execute_query(sql, params=None):
     """Execute raw SQL query on Supabase (for views and complex queries)"""
@@ -137,7 +170,8 @@ def get_table_data(table_name, filters=None, order_by=None, limit=None):
         if not user_id:
             return []
         
-        query = supabase_client.table(table_name).select("*").eq("user_id", user_id)
+        client = get_authenticated_client()  # Use authenticated client
+        query = client.table(table_name).select("*").eq("user_id", user_id)
         
         if filters:
             for key, value in filters.items():
@@ -164,7 +198,8 @@ def insert_table_data(table_name, data):
         
         # Add user_id to all data
         data_with_user = {**data, "user_id": user_id}
-        response = supabase_client.table(table_name).insert(data_with_user).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        response = client.table(table_name).insert(data_with_user).execute()
         return response.data[0] if response.data else None
     except Exception as e:
         st.error(f"Error inserting into {table_name}: {e}")
@@ -177,7 +212,8 @@ def update_table_data(table_name, id_value, data):
         if not user_id:
             return None
         
-        response = supabase_client.table(table_name).update(data).eq("id", id_value).eq("user_id", user_id).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        response = client.table(table_name).update(data).eq("id", id_value).eq("user_id", user_id).execute()
         return response.data[0] if response.data else None
     except Exception as e:
         st.error(f"Error updating {table_name}: {e}")
@@ -190,7 +226,8 @@ def delete_table_data(table_name, id_value):
         if not user_id:
             return False
         
-        response = supabase_client.table(table_name).delete().eq("id", id_value).eq("user_id", user_id).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        response = client.table(table_name).delete().eq("id", id_value).eq("user_id", user_id).execute()
         return True
     except Exception as e:
         st.error(f"Error deleting from {table_name}: {e}")
@@ -204,7 +241,8 @@ def get_setting(key):
         if not user_id:
             return None
         
-        response = supabase_client.table("settings").select("value").eq("key", key).eq("user_id", user_id).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        response = client.table("settings").select("value").eq("key", key).eq("user_id", user_id).execute()
         if response.data:
             return response.data[0]["value"]
         return None
@@ -221,12 +259,14 @@ def set_setting(key, value):
         if not user_id:
             return False
         
+        client = get_authenticated_client()  # Use authenticated client
+        
         # Check if setting exists
         existing = get_setting(key)
         if existing:
-            supabase_client.table("settings").update({"value": value}).eq("key", key).eq("user_id", user_id).execute()
+            client.table("settings").update({"value": value}).eq("key", key).eq("user_id", user_id).execute()
         else:
-            supabase_client.table("settings").insert({"key": key, "value": value, "user_id": user_id}).execute()
+            client.table("settings").insert({"key": key, "value": value, "user_id": user_id}).execute()
         return True
     except Exception as e:
         st.error(f"Error setting {key}: {e}")
@@ -260,7 +300,8 @@ def calculate_total_owed(loan_id):
             return 0, 0, 0
         
         # Get loan info with user isolation
-        loans = supabase_client.table("loans_new").select("*").eq("id", loan_id).eq("user_id", user_id).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        loans = client.table("loans_new").select("*").eq("id", loan_id).eq("user_id", user_id).execute()
         if not loans.data:
             return 0, 0, 0
         
@@ -268,7 +309,7 @@ def calculate_total_owed(loan_id):
         current_principal = loan["current_principal"]
         
         # Get unpaid interest for this loan (user isolation handled by RLS)
-        interest_data = supabase_client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan_id).eq("is_paid", 0).execute()
+        interest_data = client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan_id).eq("is_paid", 0).execute()
         
         unpaid_interest = sum(item["interest_amount"] for item in interest_data.data if item["interest_amount"] > 0)
         total_owed = round(current_principal + unpaid_interest, 2)
@@ -304,7 +345,8 @@ def calculate_total_owed(loan_id):
         current_principal = loan["current_principal"]
         
         # Get unpaid interest
-        interest_data = supabase_client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan_id).eq("is_paid", 0).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        interest_data = client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan_id).eq("is_paid", 0).execute()
         
         unpaid_interest = sum(item["interest_amount"] for item in interest_data.data if item["interest_amount"] > 0)
         total_owed = round(current_principal + unpaid_interest, 2)
@@ -323,8 +365,9 @@ def process_payment(loan_id, payment_amount, payment_date):
             return False, "User not authenticated"
 
         # ---------------- GET LOAN (USER-SCOPED) ----------------
+        client = get_authenticated_client()  # Use authenticated client
         loans = (
-            supabase_client
+            client
             .table("loans_new")
             .select("*")
             .eq("id", loan_id)
@@ -340,7 +383,7 @@ def process_payment(loan_id, payment_amount, payment_date):
 
         # ---------------- GET UNPAID INTEREST ----------------
         interest_data = (
-            supabase_client
+            client
             .table("loan_interest_history")
             .select("*")
             .eq("loan_id", loan_id)
@@ -365,7 +408,7 @@ def process_payment(loan_id, payment_amount, payment_date):
 
             if remaining_payment >= interest_amount:
                 # Fully pay interest
-                supabase_client.table("loan_interest_history").update({
+                client.table("loan_interest_history").update({
                     "is_paid": 1
                 }).eq("id", entry_id).eq("user_id", user_id).execute()
 
@@ -375,7 +418,7 @@ def process_payment(loan_id, payment_amount, payment_date):
                 # Partial interest payment
                 new_interest_amount = round(interest_amount - remaining_payment, 2)
 
-                supabase_client.table("loan_interest_history").update({
+                client.table("loan_interest_history").update({
                     "interest_amount": new_interest_amount
                 }).eq("id", entry_id).eq("user_id", user_id).execute()
 
@@ -388,12 +431,12 @@ def process_payment(loan_id, payment_amount, payment_date):
             new_principal = round(current_principal - applied_to_principal, 2)
             new_principal = max(new_principal, 0)
 
-            supabase_client.table("loans_new").update({
+            client.table("loans_new").update({
                 "current_principal": new_principal
             }).eq("id", loan_id).eq("user_id", user_id).execute()
 
         # ---------------- RECORD PAYMENT (CRITICAL FIX) ----------------
-        supabase_client.table("payments_new").insert({
+        client.table("payments_new").insert({
             "loan_id": loan_id,
             "amount": payment_amount,
             "payment_date": payment_date.isoformat(),
@@ -408,7 +451,7 @@ def process_payment(loan_id, payment_amount, payment_date):
 
         new_status = "Paid" if total_owed <= 0 else "Active"
 
-        supabase_client.table("loans_new").update({
+        client.table("loans_new").update({
             "status": new_status
         }).eq("id", loan_id).eq("user_id", user_id).execute()
 
@@ -431,8 +474,9 @@ def check_and_add_overdue_interest():
                 return False  # Stop if no user is logged in
             
             # Get active loans for current user only
+            client = get_authenticated_client()  # Use authenticated client
             loans_data = (
-                supabase_client
+                client
                 .table("loans_new")
                 .select("*")
                 .eq("user_id", user_id)
@@ -454,7 +498,7 @@ def check_and_add_overdue_interest():
                 while today > current_due_date:
                     # Check if interest already exists for this due date
                     existing_interest = (
-                        supabase_client
+                        client
                         .table("loan_interest_history")
                         .select("*")
                         .eq("loan_id", loan_id)
@@ -465,7 +509,7 @@ def check_and_add_overdue_interest():
                     if not existing_interest.data:
                         interest_amount = calculate_interest(current_principal)
                         
-                        supabase_client.table("loan_interest_history").insert({
+                        client.table("loan_interest_history").insert({
                             "loan_id": loan_id,
                             "due_date": current_due_date.isoformat(),
                             "interest_amount": interest_amount,
@@ -479,7 +523,7 @@ def check_and_add_overdue_interest():
                     current_due_date = current_due_date + relativedelta(months=1)
                 
                 # Update the loan's current due date and status
-                supabase_client.table("loans_new").update({
+                client.table("loans_new").update({
                     "current_due_date": current_due_date.isoformat(),
                     "status": "Overdue"
                 }).eq("id", loan_id).execute()
@@ -518,7 +562,8 @@ def update_loan_statuses():
             pass  # Silently continue
         
         # Get all loans for current user only
-        loans_data = supabase_client.table("loans_new").select("*").eq("user_id", user_id).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        loans_data = client.table("loans_new").select("*").eq("user_id", user_id).execute()
         
         for loan in loans_data.data:
             loan_id = loan["id"]
@@ -537,7 +582,7 @@ def update_loan_statuses():
                 else:
                     status = "Partial"
             
-            supabase_client.table("loans_new").update({"status": status}).eq("id", loan_id).eq("user_id", user_id).execute()
+            client.table("loans_new").update({"status": status}).eq("id", loan_id).eq("user_id", user_id).execute()
         
         return True
     except Exception as e:
@@ -563,9 +608,8 @@ safe_update_loan_statuses()
 def get_loans_simple_view():
     """Get loans data in the simple view format"""
     try:
-        # This is a complex query that we need to handle manually
-        # Get all loans with client and group info
-        loans_data = supabase_client.table("loans_new").select("*, clients(name, groups(name))").execute()
+        client = get_authenticated_client()  # Use authenticated client
+        loans_data = client.table("loans_new").select("*, clients(name, groups(name))").execute()
         
         results = []
         for loan in loans_data.data:
@@ -574,11 +618,11 @@ def get_loans_simple_view():
             group_name = loan["clients"]["groups"]["name"] if loan.get("clients") and loan["clients"].get("groups") else ""
             
             # Calculate interest
-            interest_data = supabase_client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan_id).eq("is_paid", 0).execute()
+            interest_data = client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan_id).eq("is_paid", 0).execute()
             interest = sum(item["interest_amount"] for item in interest_data.data)
             
             # Calculate paid amount
-            payments_data = supabase_client.table("payments_new").select("amount").eq("loan_id", loan_id).execute()
+            payments_data = client.table("payments_new").select("amount").eq("loan_id", loan_id).execute()
             paid = sum(item["amount"] for item in payments_data.data)
             
             total = loan["current_principal"] + interest
@@ -604,23 +648,23 @@ def get_loans_simple_view():
 def get_payments_simple_view(limit=20):
     """Get payments data in the simple view format"""
     try:
-        # Get payments with loan and client info
-        payments_data = supabase_client.table("payments_new").select("*, loans_new(*, clients(*, groups(*)))").order("payment_date", desc=True).limit(limit).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        payments_data = client.table("payments_new").select("*, loans_new(*, clients(*, groups(*)))").order("payment_date", desc=True).limit(limit).execute()
         
         results = []
         for payment in payments_data.data:
             loan = payment.get("loans_new", {})
-            client = loan.get("clients", {})
-            group = client.get("groups", {})
+            client_data = loan.get("clients", {})
+            group = client_data.get("groups", {})
             
             # Calculate interest for this loan
-            interest_data = supabase_client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan.get("id")).eq("is_paid", 0).execute()
+            interest_data = client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan.get("id")).eq("is_paid", 0).execute()
             interest = sum(item["interest_amount"] for item in interest_data.data)
             
             total = loan.get("current_principal", 0) + interest
             
             results.append({
-                "client": client.get("name", ""),
+                "client": client_data.get("name", ""),
                 "group_name": group.get("name", ""),
                 "loan_date": loan.get("loan_date", ""),
                 "due_date": loan.get("current_due_date", ""),
@@ -641,7 +685,8 @@ def get_payments_simple_view(limit=20):
 def can_delete_client(client_id):
     """Check if client can be deleted (no related loans)"""
     try:
-        loans_data = supabase_client.table("loans_new").select("id").eq("client_id", client_id).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        loans_data = client.table("loans_new").select("id").eq("client_id", client_id).execute()
         return len(loans_data.data) == 0
     except Exception as e:
         st.error(f"Error checking client deletion: {e}")
@@ -650,7 +695,8 @@ def can_delete_client(client_id):
 def can_delete_group(group_id):
     """Check if group can be deleted (no related clients)"""
     try:
-        clients_data = supabase_client.table("clients").select("id").eq("group_id", group_id).execute()
+        client = get_authenticated_client()  # Use authenticated client
+        clients_data = client.table("clients").select("id").eq("group_id", group_id).execute()
         return len(clients_data.data) == 0
     except Exception as e:
         st.error(f"Error checking group deletion: {e}")
@@ -659,20 +705,21 @@ def can_delete_group(group_id):
 def delete_client_with_related_data(client_id):
     """Delete client and all related data"""
     try:
+        client = get_authenticated_client()  # Use authenticated client
         # Get all loan IDs for this client
-        loans_data = supabase_client.table("loans_new").select("id").eq("client_id", client_id).execute()
+        loans_data = client.table("loans_new").select("id").eq("client_id", client_id).execute()
         
         # Delete related payments and interest history for each loan
         for loan in loans_data.data:
             loan_id = loan["id"]
-            supabase_client.table("payments_new").delete().eq("loan_id", loan_id).execute()
-            supabase_client.table("loan_interest_history").delete().eq("loan_id", loan_id).execute()
+            client.table("payments_new").delete().eq("loan_id", loan_id).execute()
+            client.table("loan_interest_history").delete().eq("loan_id", loan_id).execute()
         
         # Delete loans
-        supabase_client.table("loans_new").delete().eq("client_id", client_id).execute()
+        client.table("loans_new").delete().eq("client_id", client_id).execute()
         
         # Delete client
-        supabase_client.table("clients").delete().eq("id", client_id).execute()
+        client.table("clients").delete().eq("id", client_id).execute()
         
         return True, "Client and all related data deleted successfully"
     except Exception as e:
@@ -681,17 +728,18 @@ def delete_client_with_related_data(client_id):
 def delete_group_with_related_data(group_id):
     """Delete group and all related data"""
     try:
+        client = get_authenticated_client()  # Use authenticated client
         # Get all client IDs in this group
-        clients_data = supabase_client.table("clients").select("id").eq("group_id", group_id).execute()
+        clients_data = client.table("clients").select("id").eq("group_id", group_id).execute()
         
         # Delete each client and their related data
-        for client in clients_data.data:
-            success, message = delete_client_with_related_data(client["id"])
+        for client_data in clients_data.data:
+            success, message = delete_client_with_related_data(client_data["id"])
             if not success:
                 return False, message
         
         # Delete group
-        supabase_client.table("groups").delete().eq("id", group_id).execute()
+        client.table("groups").delete().eq("id", group_id).execute()
         
         return True, "Group and all related data deleted successfully"
     except Exception as e:
@@ -700,7 +748,8 @@ def delete_group_with_related_data(group_id):
 def update_client(client_id, new_name, new_group_id):
     """Update client information"""
     try:
-        supabase_client.table("clients").update({
+        client = get_authenticated_client()  # Use authenticated client
+        client.table("clients").update({
             "name": new_name.strip(),
             "group_id": new_group_id
         }).eq("id", client_id).execute()
@@ -711,7 +760,8 @@ def update_client(client_id, new_name, new_group_id):
 def update_group(group_id, new_name, new_start_date, new_end_date):
     """Update group information"""
     try:
-        supabase_client.table("groups").update({
+        client = get_authenticated_client()  # Use authenticated client
+        client.table("groups").update({
             "name": new_name.strip(),
             "start_date": new_start_date.isoformat(),
             "end_date": new_end_date.isoformat()
@@ -723,8 +773,9 @@ def update_group(group_id, new_name, new_start_date, new_end_date):
 def update_loan(loan_id, new_principal, new_due_date):
     """Update loan information"""
     try:
+        client = get_authenticated_client()  # Use authenticated client
         # Get current loan details
-        loans_data = supabase_client.table("loans_new").select("*").eq("id", loan_id).execute()
+        loans_data = client.table("loans_new").select("*").eq("id", loan_id).execute()
         if not loans_data.data:
             return False, "Loan not found"
         
@@ -732,7 +783,7 @@ def update_loan(loan_id, new_principal, new_due_date):
         new_principal_rounded = round(float(new_principal), 2)
         
         # Update loan principal
-        supabase_client.table("loans_new").update({
+        client.table("loans_new").update({
             "current_principal": new_principal_rounded,
             "original_principal": new_principal_rounded,
             "current_due_date": new_due_date.isoformat(),
@@ -743,17 +794,17 @@ def update_loan(loan_id, new_principal, new_due_date):
         interest = calculate_interest(new_principal_rounded)
         
         # Check if interest record exists
-        existing_interest = supabase_client.table("loan_interest_history").select("*").eq("loan_id", loan_id).eq("due_date", new_due_date.isoformat()).execute()
+        existing_interest = client.table("loan_interest_history").select("*").eq("loan_id", loan_id).eq("due_date", new_due_date.isoformat()).execute()
         
         if existing_interest.data:
             # Update existing interest
-            supabase_client.table("loan_interest_history").update({
+            client.table("loan_interest_history").update({
                 "interest_amount": interest,
                 "principal_at_time": new_principal_rounded
             }).eq("id", existing_interest.data[0]["id"]).execute()
         else:
             # Create new interest record
-            supabase_client.table("loan_interest_history").insert({
+            client.table("loan_interest_history").insert({
                 "loan_id": loan_id,
                 "due_date": new_due_date.isoformat(),
                 "interest_amount": interest,
@@ -770,14 +821,15 @@ def update_loan(loan_id, new_principal, new_due_date):
 def delete_loan_with_related_data(loan_id):
     """Delete loan and all related data"""
     try:
+        client = get_authenticated_client()  # Use authenticated client
         # Delete related payments
-        supabase_client.table("payments_new").delete().eq("loan_id", loan_id).execute()
+        client.table("payments_new").delete().eq("loan_id", loan_id).execute()
         
         # Delete related interest history
-        supabase_client.table("loan_interest_history").delete().eq("loan_id", loan_id).execute()
+        client.table("loan_interest_history").delete().eq("loan_id", loan_id).execute()
         
         # Delete loan
-        supabase_client.table("loans_new").delete().eq("id", loan_id).execute()
+        client.table("loans_new").delete().eq("id", loan_id).execute()
         
         return True, "Loan and all related data deleted successfully"
     except Exception as e:
@@ -870,17 +922,24 @@ def login_page():
                         st.session_state.auth_session = auth_response
                         st.session_state.user = auth_response.user.email
                         
+                        # CRITICAL: Update the client with the session token
                         try:
-                            profile = supabase_client.table("user_profiles") \
-                                .select("*") \
-                                .eq("user_id", auth_response.user.id) \
+                            supabase_client.auth.set_session(
+                                auth_response.session.access_token,
+                                auth_response.session.refresh_token
+                            )
+                        except Exception as token_error:
+                            st.warning(f"Session setup note: {token_error}")
+                        
+                        try:
+                            profile = supabase_client.table("user_profiles")\
+                                .select("*")\
+                                .eq("user_id", auth_response.user.id)\
                                 .execute()
                             if profile.data:
-                                st.session_state.user_display_name = (
-                                    profile.data[0]["display_name"]
-                                    or profile.data[0]["username"]
-                                )
+                                st.session_state.user_display_name = profile.data[0]["display_name"] or profile.data[0]["username"]
                             else:
+                                # Fallback to email prefix
                                 st.session_state.user_display_name = auth_response.user.email.split('@')[0]
                         except:
                             st.session_state.user_display_name = auth_response.user.email.split('@')[0]
@@ -918,13 +977,14 @@ def login_page():
                     try:
                         # Check username uniqueness using service client
                         try:
-                            existing_profile = supabase_service.table("user_profiles") \
-                                .select("*") \
-                                .eq("username", new_username) \
-                                .execute()
-                            if existing_profile.data:
-                                st.error("Username already taken. Please choose another.")
-                                st.stop()
+                            if supabase_service:
+                                existing_profile = supabase_service.table("user_profiles") \
+                                    .select("*") \
+                                    .eq("username", new_username) \
+                                    .execute()
+                                if existing_profile.data:
+                                    st.error("Username already taken. Please choose another.")
+                                    st.stop()
                         except:
                             pass
                         
@@ -1019,15 +1079,20 @@ if not st.session_state.auth_session:
     login_page()
     st.stop()
 
-# Verify session is still valid
+# Test authentication is working
 try:
-    # This will refresh the session if needed
-    current_user = supabase_client.auth.get_user()
-    if not current_user.user:
-        st.session_state.auth_session = None
-        st.session_state.user = None
-        st.rerun()
-except:
+    # Get authenticated client
+    client = get_authenticated_client()
+    if client:
+        # Try to get current user to verify auth
+        user_info = client.auth.get_user()
+        if not user_info.user:
+            st.error("Authentication failed. Please login again.")
+            st.session_state.auth_session = None
+            st.session_state.user = None
+            st.rerun()
+except Exception as e:
+    st.error(f"Authentication error: {e}")
     st.session_state.auth_session = None
     st.session_state.user = None
     st.rerun()
@@ -1234,44 +1299,46 @@ elif menu == "👤 Clients":
     group_names = groups_df["name"].tolist() if not groups_df.empty else []
     
     # Get clients data with group info
-    clients_data = supabase_client.table("clients").select("*, groups(name)").order("name").execute()
+    client = get_authenticated_client()  # Use authenticated client
+    clients_data = client.table("clients").select("*, groups(name)").order("name").execute()
     clients_list = []
-    for client in clients_data.data:
+    for client_data in clients_data.data:
         clients_list.append({
-            "id": client["id"],
-            "name": client["name"],
-            "group_id": client["group_id"],
-            "group_name": client["groups"]["name"] if client.get("groups") else "No Group"
+            "id": client_data["id"],
+            "name": client_data["name"],
+            "group_id": client_data["group_id"],
+            "group_name": client_data["groups"]["name"] if client_data.get("groups") else "No Group"
         })
     clients_df = pd.DataFrame(clients_list)
     
     if not clients_df.empty:
         st.subheader("Edit or Delete Clients")
         
-        for _, client in clients_df.iterrows():
-            with st.expander(f"👤 {client['name']} (Group: {client['group_name'] or 'No Group'})"):
+        for _, client_data in clients_df.iterrows():
+            with st.expander(f"👤 {client_data['name']} (Group: {client_data['group_name'] or 'No Group'})"):
                 col1, col2 = st.columns([3, 1])
                 
                 with col1:
-                    with st.form(f"edit_client_{client['id']}"):
-                        new_name = st.text_input("Client Name", value=client['name'], key=f"name_{client['id']}")
+                    with st.form(f"edit_client_{client_data['id']}"):
+                        new_name = st.text_input("Client Name", value=client_data['name'], key=f"name_{client_data['id']}")
                         
                         # Find current group index
-                        current_group_name = client['group_name'] or "-- choose group --"
+                        current_group_name = client_data['group_name'] or "-- choose group --"
                         group_options = ["-- choose group --"] + group_names
                         current_index = group_options.index(current_group_name) if current_group_name in group_options else 0
                         
-                        new_group = st.selectbox("Group", group_options, index=current_index, key=f"group_{client['id']}")
+                        new_group = st.selectbox("Group", group_options, index=current_index, key=f"group_{client_data['id']}")
                         
                         if st.form_submit_button("Update Client"):
                             if new_group == "-- choose group --":
                                 st.error("Please select a group")
                             else:
                                 # Get the new group ID
-                                new_group_id_result = supabase_client.table("groups").select("id").eq("name", new_group).execute()
+                                client = get_authenticated_client()  # Use authenticated client
+                                new_group_id_result = client.table("groups").select("id").eq("name", new_group).execute()
                                 if new_group_id_result.data:
                                     new_group_id = new_group_id_result.data[0]["id"]
-                                    success, message = update_client(client['id'], new_name, new_group_id)
+                                    success, message = update_client(client_data['id'], new_name, new_group_id)
                                     if success:
                                         st.success(message)
                                         st.rerun()
@@ -1281,9 +1348,9 @@ elif menu == "👤 Clients":
                                     st.error("Selected group not found in database")
                 
                 with col2:
-                    if st.button("🗑️ Delete", key=f"delete_{client['id']}"):
-                        if can_delete_client(client['id']):
-                            success, message = delete_client_with_related_data(client['id'])
+                    if st.button("🗑️ Delete", key=f"delete_{client_data['id']}"):
+                        if can_delete_client(client_data['id']):
+                            success, message = delete_client_with_related_data(client_data['id'])
                             if success:
                                 st.success(message)
                                 st.rerun()
@@ -1303,7 +1370,8 @@ elif menu == "👤 Clients":
             elif gsel == "-- choose group --":
                 st.error("Choose a group first")
             else:
-                group_result = supabase_client.table("groups").select("id").eq("name", gsel).execute()
+                client = get_authenticated_client()  # Use authenticated client
+                group_result = client.table("groups").select("id").eq("name", gsel).execute()
                 if group_result.data:
                     group_id = group_result.data[0]["id"]
                     try:
@@ -1384,7 +1452,8 @@ elif menu == "💰 Loans":
             elif principal <= 0:
                 st.error("Principal must be > 0")
             else:
-                client_result = supabase_client.table("clients").select("id").eq("name", client_sel).execute()
+                client = get_authenticated_client()  # Use authenticated client
+                client_result = client.table("clients").select("id").eq("name", client_sel).execute()
                 if client_result.data:
                     client_id = client_result.data[0]["id"]
                     principal_rounded = round(float(principal), 2)
@@ -1452,13 +1521,14 @@ elif menu == "💳 Payments":
     
     # Get active loans for dropdown
     try:
+        client = get_authenticated_client()  # Use authenticated client
         # Get loans that are not paid
-        loans_data = supabase_client.table("loans_new").select("*, clients(name)").neq("status", "Paid").order("current_due_date").execute()
+        loans_data = client.table("loans_new").select("*, clients(name)").neq("status", "Paid").order("current_due_date").execute()
         
         active_loans = []
         for loan in loans_data.data:
             # Calculate unpaid interest
-            interest_data = supabase_client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan["id"]).eq("is_paid", 0).gt("interest_amount", 0).execute()
+            interest_data = client.table("loan_interest_history").select("interest_amount").eq("loan_id", loan["id"]).eq("is_paid", 0).gt("interest_amount", 0).execute()
             unpaid_interest = sum(item["interest_amount"] for item in interest_data.data)
             
             active_loans.append({
@@ -1534,7 +1604,8 @@ elif menu == "💳 Payments":
                         st.success(f"✅ Payment recorded")
                         
                         # Show payment breakdown
-                        payment_details = supabase_client.table("payments_new").select("*").eq("loan_id", selected_loan_id).order("id", desc=True).limit(1).execute()
+                        client = get_authenticated_client()  # Use authenticated client
+                        payment_details = client.table("payments_new").select("*").eq("loan_id", selected_loan_id).order("id", desc=True).limit(1).execute()
                         
                         if payment_details.data:
                             payment = payment_details.data[0]
@@ -1878,14 +1949,15 @@ elif menu == "🔐 Change Password":
                     if new_username and new_username != current_username:
                         try:
                             # Check if username is available
-                            existing = supabase_client.table("user_profiles")\
+                            client = get_authenticated_client()  # Use authenticated client
+                            existing = client.table("user_profiles")\
                                 .select("*").eq("username", new_username).execute()
                             if existing.data:
                                 st.error("Username already taken. Please choose another.")
                                 st.stop()
                             
                             # Update user_profiles table
-                            supabase_client.table("user_profiles").update({
+                            client.table("user_profiles").update({
                                 "username": new_username,
                                 "display_name": new_username
                             }).eq("user_id", get_current_user_id()).execute()
@@ -1981,6 +2053,7 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
+
 
 
 
