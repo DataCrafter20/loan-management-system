@@ -1947,7 +1947,7 @@ elif menu == "🧾 PDF Export":
             story = []
             
             # Header
-            story.append(Paragraph(f"{business_name or 'Loan Management System'}", styles["Title"]))
+            story.append(Paragraph(f"{business_name or 'Nethengwe Finance Services (NFS)'}", styles["Title"]))
             story.append(Paragraph(title, styles["Heading1"]))
             story.append(Paragraph(f"Generated: {date.today().isoformat()}", styles["Normal"]))
             story.append(Spacer(1, 12))
@@ -2193,6 +2193,7 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
+
 
 
 
