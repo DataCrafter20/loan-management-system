@@ -1867,12 +1867,12 @@ elif menu == "🔍 Search":
 elif menu == "🧾 PDF Export":
     page_header("PDF Report")
     
-    # Get clients for selection (uses cached version)
+    # Get clients for selection
     clients_data = get_table_data("clients", order_by="name")
     clients_df = pd.DataFrame(clients_data) if clients_data else pd.DataFrame()
     client_names = clients_df["name"].tolist() if not clients_df.empty else []
     
-    # Get groups for selection (uses cached version)
+    # Get groups for selection
     groups_data = get_table_data("groups", order_by="name")
     groups_df = pd.DataFrame(groups_data) if groups_data else pd.DataFrame()
     group_names = groups_df["name"].tolist() if not groups_df.empty else []
@@ -1901,6 +1901,10 @@ elif menu == "🧾 PDF Export":
                 if loans_list:
                     df = pd.DataFrame(loans_list)
                     loans_df = df[df['client'] == client_sel]
+
+                    # 🔹 SORT BY LOAN DATE (EARLY → LATE)
+                    loans_df['loan_date'] = pd.to_datetime(loans_df['loan_date'])
+                    loans_df = loans_df.sort_values(by='loan_date', ascending=True)
                     
                     if loans_df.empty:
                         st.error("No loans found for this client")
@@ -1918,6 +1922,10 @@ elif menu == "🧾 PDF Export":
                 if loans_list:
                     df = pd.DataFrame(loans_list)
                     loans_df = df[df['group_name'] == group_sel]
+
+                    # 🔹 SORT BY LOAN DATE (EARLY → LATE)
+                    loans_df['loan_date'] = pd.to_datetime(loans_df['loan_date'])
+                    loans_df = loans_df.sort_values(by='loan_date', ascending=True)
                     
                     if loans_df.empty:
                         st.error("No loans found for this group")
@@ -1939,7 +1947,7 @@ elif menu == "🧾 PDF Export":
             story = []
             
             # Header
-            story.append(Paragraph(f"{business_name or 'Nethengwe Finance Services (NFS)'}", styles["Title"]))
+            story.append(Paragraph(f"{business_name or 'Loan Management System'}", styles["Title"]))
             story.append(Paragraph(title, styles["Heading1"]))
             story.append(Paragraph(f"Generated: {date.today().isoformat()}", styles["Normal"]))
             story.append(Spacer(1, 12))
@@ -1955,7 +1963,7 @@ elif menu == "🧾 PDF Export":
                 table_data.append([
                     row['client'] if data_type == 'group' else '',
                     row['group_name'] if data_type == 'client' else '',
-                    row['loan_date'],
+                    row['loan_date'].date().isoformat(),
                     row['due_date'],
                     f"R {row['principal']:.2f}",
                     f"R {row['interest']:.2f}",
@@ -2031,6 +2039,7 @@ elif menu == "🧾 PDF Export":
             )
             
             st.info(f"**File will download as:** `{filename}`")
+
 
 # ---------- PAGE: Change Password ----------
 elif menu == "🔐 Change Password":
@@ -2184,6 +2193,8 @@ elif menu == "🚪 Logout":
 if "auth_session" in st.session_state and st.session_state.auth_session:
     safe_update_loan_statuses()
 daily_backup()
+
+
 
 
 
