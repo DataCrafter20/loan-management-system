@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: loan-management
+    runtime: python
+    plan: free
+    autoDeploy: true
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn loan_management.wsgi:application"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: loan-management-db
+          property: connectionString
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_DEBUG
+        value: False
+      - key: ALLOWED_HOSTS
+        value: .onrender.com,localhost,127.0.0.1
+
+databases:
+  - name: loan-management-db
+    plan: free
+    databaseName: loan_management
+    user: loan_user
