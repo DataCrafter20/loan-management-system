@@ -1,0 +1,102 @@
+{% extends 'core/base.html' %}
+
+{% block page_title %}Tutorial Dashboard{% endblock %}
+
+{% block content %}
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="value">{{ total_clients }}</div>
+        <div class="label">Total Clients</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">{{ total_loans }}</div>
+        <div class="label">Total Loans</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">{{ format_money|cut:":" }}{{ total_issued }}</div>
+        <div class="label">Total Issued</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">{{ format_money|cut:":" }}{{ total_outstanding }}</div>
+        <div class="label">Outstanding</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">{{ format_money|cut:":" }}{{ total_interest }}</div>
+        <div class="label">Total Interest</div>
+    </div>
+</div>
+
+<div class="card">
+    <h3>How this Loan System Works</h3>
+    <p>This page explains how to use the system.</p>
+    
+    <h4>Pages:</h4>
+    <ol>
+        <li><strong>📁 Groups</strong> — Create a group (for example 'January 2026'). Groups help you organise clients by month or batch.</li>
+        <li><strong>👤 Clients</strong> — Add clients and assign them to a group.</li>
+        <li><strong>💰 Loans</strong> — Create loans for clients. Interest is calculated automatically (40% rate shown).</li>
+        <li><strong>💳 Payments</strong> — Record cash received. Amounts are rounded to 2 decimals.</li>
+        <li><strong>🔍 Search</strong> — Find all loan info by Client, Group, or Due Date.</li>
+        <li><strong>📆 Monthly Overview</strong> — See groups and clients organized by month.</li>
+        <li><strong>🧾 PDF Export</strong> — Export a full client statement with colored statuses and balances.</li>
+        <li><strong>🔐 Change Password</strong> — Securely change your password.</li>
+    </ol>
+    
+    <h4>Loan Rules (40% Interest):</h4>
+    <ul>
+        <li>Principal only reduces when payment exceeds interest</li>
+        <li>Interest calculated monthly on current principal</li>
+        <li>Minimum payment = interest amount on due dates</li>
+        <li>Payments apply to interest first, then principal</li>
+    </ul>
+</div>
+
+{% if not business_name %}
+<div class="card">
+    <h3>Set Business Name</h3>
+    <form method="post" action="{% url 'core:set_business_name' %}">
+        {% csrf_token %}
+        <div class="form-group">
+            <input type="text" name="business_name" placeholder="Business name (optional)">
+        </div>
+        <button type="submit" class="btn btn-primary">Save Business Name</button>
+    </form>
+</div>
+{% endif %}
+
+{% if recent_loans %}
+<div class="card">
+    <h3>Recent Loans</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Client</th>
+                <th>Group</th>
+                <th>Loan Date</th>
+                <th>Due Date</th>
+                <th>Principal</th>
+                <th>Interest</th>
+                <th>Paid</th>
+                <th>Total</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for loan in recent_loans %}
+            <tr>
+                <td>{{ loan.client }}</td>
+                <td>{{ loan.group_name }}</td>
+                <td>{{ loan.loan_date }}</td>
+                <td>{{ loan.due_date }}</td>
+                <td>{{ format_money|cut:":" }}{{ loan.principal }}</td>
+                <td>{{ format_money|cut:":" }}{{ loan.interest }}</td>
+                <td class="{% if loan.paid > 0 %}text-green font-bold{% endif %}">{{ format_money|cut:":" }}{{ loan.paid }}</td>
+                <td class="{% if loan.total > 0 %}text-red font-bold{% endif %}">{{ format_money|cut:":" }}{{ loan.total }}</td>
+                <td>{{ loan.status|safe }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

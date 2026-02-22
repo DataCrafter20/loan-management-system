@@ -1,0 +1,52 @@
+{% extends 'core/base.html' %}
+
+{% block page_title %}🧾 PDF Report{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3>Generate PDF Report</h3>
+    <form method="post">
+        {% csrf_token %}
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div>
+                <label>
+                    <input type="radio" name="export_type" value="client" checked onchange="toggleExportType()">
+                    Client Statement
+                </label>
+                <div id="client_select" style="margin-top: 10px;">
+                    <select name="client_id" class="form-control">
+                        <option value="">-- choose client --</option>
+                        {% for client in clients %}
+                        <option value="{{ client.id }}">{{ client.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label>
+                    <input type="radio" name="export_type" value="group" onchange="toggleExportType()">
+                    Group Report
+                </label>
+                <div id="group_select" style="margin-top: 10px; display: none;">
+                    <select name="group_id" class="form-control">
+                        <option value="">-- choose group --</option>
+                        {% for group in groups %}
+                        <option value="{{ group.id }}">{{ group.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <button type="submit" class="btn btn-primary" style="margin-top: 20px;">Generate PDF</button>
+    </form>
+</div>
+
+<script>
+function toggleExportType() {
+    const clientType = document.querySelector('input[value="client"]').checked;
+    document.getElementById('client_select').style.display = clientType ? 'block' : 'none';
+    document.getElementById('group_select').style.display = clientType ? 'none' : 'block';
+}
+</script>
+{% endblock %}

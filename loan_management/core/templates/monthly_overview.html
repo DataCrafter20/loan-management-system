@@ -1,0 +1,51 @@
+{% extends 'core/base.html' %}
+
+{% block page_title %}📆 Monthly Overview{% endblock %}
+
+{% block content %}
+<p>Grouped by month & group. Shows each client, all loan info & statuses</p>
+
+{% if monthly_data %}
+    {% for month, groups in monthly_data.items %}
+    <div class="card">
+        <h3>📅 {{ month }}</h3>
+        
+        {% for group_name, loans in groups.items %}
+        <div style="margin-top: 20px;">
+            <h4>📁 {{ group_name }}</h4>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Client</th>
+                        <th>Loan Date</th>
+                        <th>Due Date</th>
+                        <th>Principal</th>
+                        <th>Interest</th>
+                        <th>Paid</th>
+                        <th>Total</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for loan in loans %}
+                    <tr>
+                        <td>{{ loan.client }}</td>
+                        <td>{{ loan.loan_date }}</td>
+                        <td>{{ loan.due_date }}</td>
+                        <td>{{ format_money|cut:":" }}{{ loan.principal|floatformat:2 }}</td>
+                        <td>{{ format_money|cut:":" }}{{ loan.interest|floatformat:2 }}</td>
+                        <td class="{% if loan.paid > 0 %}text-green font-bold{% endif %}">{{ format_money|cut:":" }}{{ loan.paid|floatformat:2 }}</td>
+                        <td class="{% if loan.total > 0 %}text-red font-bold{% endif %}">{{ format_money|cut:":" }}{{ loan.total|floatformat:2 }}</td>
+                        <td>{{ loan.status|safe }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+{% else %}
+<p>No loans to show in monthly overview.</p>
+{% endif %}
+{% endblock %}

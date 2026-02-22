@@ -1,0 +1,106 @@
+{% extends 'core/base.html' %}
+
+{% block page_title %}💳 Payments{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3>Record a payment</h3>
+    {% if active_loans %}
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add">
+        <div class="form-group">
+            <label>Select loan</label>
+            <select name="loan_id" id="loan_select" required>
+                <option value="">-- choose loan --</option>
+                {% for loan in active_loans %}
+                <option value="{{ loan.id }}" 
+                        data-principal="{{ loan.current_principal }}"
+                        data-interest="{{ loan.unpaid_interest }}"
+                        data-due="{{ loan.current_due_date }}"
+                        data-total="{{ loan.total_owed }}">
+                    {{ loan.client_name }} (Loan: {{ loan.loan_date }}) - Total: R {{ loan.total_owed|floatformat:2 }}, Due: {{ loan.current_due_date }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div id="loan_details" style="display: none; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 4px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div><strong>Principal:</strong> R <span id="detail_principal">0.00</span></div>
+                <div><strong>Unpaid Interest:</strong> R <span id="detail_interest">0.00</span></div>
+                <div><strong>Due Date:</strong> <span id="detail_due"></span></div>
+                <div><strong>Total Owed:</strong> R <span id="detail_total">0.00</span></div>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label>Amount (R)</label>
+            <input type="number" name="amount" step="0.01" min="0" value="0" required>
+        </div>
+        <div class="form-group">
+            <label>Payment date</label>
+            <input type="date" name="payment_date" value="{{ today }}" required>
+        </div>
+        <button type="submit" class="btn btn-success">Record payment</button>
+    </form>
+    {% else %}
+    <p>No active loans found. All loans may be fully paid.</p>
+    {% endif %}
+</div>
+
+{% if payments %}
+<div class="card">
+    <h3>Recent Payments</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Client</th>
+                <th>Group Name</th>
+                <th>Loan Date</th>
+                <th>Due Date</th>
+                <th>Principal</th>
+                <th>Interest</th>
+                <th>Paid</th>
+                <th>Total</th>
+                <th>Payment Date</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for payment in payments %}
+            <tr>
+                <td>{{ payment.client }}</td>
+                <td>{{ payment.group_name }}</td>
+                <td>{{ payment.loan_date }}</td>
+                <td>{{ payment.due_date }}</td>
+                <td>{{ format_money|cut:":" }}{{ payment.principal }}</td>
+                <td>{{ format_money|cut:":" }}{{ payment.interest }}</td>
+                <td class="{% if payment.paid > 0 %}text-green font-bold{% endif %}">{{ format_money|cut:":" }}{{ payment.paid }}</td>
+                <td class="{% if payment.total > 0 %}text-red font-bold{% endif %}">{{ format_money|cut:":" }}{{ payment.total }}</td>
+                <td>{{ payment.payment_date }}</td>
+                <td>{{ payment.status|safe }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<script>
+document.getElementById('loan_select').addEventListener('change', function() {
+    const selected = this.options[this.selectedIndex];
+    const detailsDiv = document.getElementById('loan_details');
+    
+    if (this.value) {
+        document.getElementById('detail_principal').textContent = parseFloat(selected.dataset.principal).toFixed(2);
+        document.getElementById('detail_interest').textContent = parseFloat(selected.dataset.interest).toFixed(2);
+        document.getElementById('detail_due').textContent = selected.dataset.due;
+        document.getElementById('detail_total').textContent = parseFloat(selected.dataset.total).toFixed(2);
+        detailsDiv.style.display = 'block';
+    } else {
+        detailsDiv.style.display = 'none';
+    }
+});
+</script>
+{% endblock %}

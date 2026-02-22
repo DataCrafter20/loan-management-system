@@ -1,0 +1,57 @@
+{% extends 'core/base.html' %}
+
+{% block page_title %}🔍 Search Loans{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3>Search by Client, Group, or Due Date</h3>
+    <form method="get">
+        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+            <select name="type" style="width: 150px;">
+                <option value="client" {% if search_type == 'client' %}selected{% endif %}>Client</option>
+                <option value="group" {% if search_type == 'group' %}selected{% endif %}>Group</option>
+                <option value="date" {% if search_type == 'date' %}selected{% endif %}>Due Date</option>
+            </select>
+            <input type="text" name="q" value="{{ query }}" placeholder="Search..." style="flex: 1;">
+            <button type="submit" class="btn btn-primary">Search</button>
+        </div>
+    </form>
+    
+    {% if query %}
+        {% if results %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Client</th>
+                    <th>Group Name</th>
+                    <th>Loan Date</th>
+                    <th>Due Date</th>
+                    <th>Principal</th>
+                    <th>Interest</th>
+                    <th>Paid</th>
+                    <th>Total</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for loan in results %}
+                <tr>
+                    <td>{{ loan.client }}</td>
+                    <td>{{ loan.group_name }}</td>
+                    <td>{{ loan.loan_date }}</td>
+                    <td>{{ loan.due_date }}</td>
+                    <td>{{ format_money|cut:":" }}{{ loan.principal|floatformat:2 }}</td>
+                    <td>{{ format_money|cut:":" }}{{ loan.interest|floatformat:2 }}</td>
+                    <td class="{% if loan.paid > 0 %}text-green font-bold{% endif %}">{{ format_money|cut:":" }}{{ loan.paid|floatformat:2 }}</td>
+                    <td class="{% if loan.total > 0 %}text-red font-bold{% endif %}">{{ format_money|cut:":" }}{{ loan.total|floatformat:2 }}</td>
+                    <td>{{ loan.status|safe }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>No results found</p>
+        {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

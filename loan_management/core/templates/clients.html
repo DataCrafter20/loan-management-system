@@ -1,0 +1,93 @@
+{% extends 'core/base.html' %}
+
+{% block page_title %}👤 Manage Clients{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3>Add a client</h3>
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add">
+        <div class="form-group">
+            <label>Client full name</label>
+            <input type="text" name="name" required>
+        </div>
+        <div class="form-group">
+            <label>Group</label>
+            <select name="group_id" required>
+                <option value="">-- choose group --</option>
+                {% for group in groups %}
+                <option value="{{ group.id }}">{{ group.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-success">Add client</button>
+    </form>
+</div>
+
+{% if clients %}
+<div class="card">
+    <h3>Edit or Delete Clients</h3>
+    {% for client in clients %}
+    <div class="expander">
+        <div class="expander-header">👤 {{ client.name }} (Group: {{ client.group.name|default:'No Group' }})</div>
+        <div class="expander-content">
+            <div style="display: grid; grid-template-columns: 3fr 1fr; gap: 20px;">
+                <div>
+                    <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="update">
+                        <input type="hidden" name="client_id" value="{{ client.id }}">
+                        <div class="form-group">
+                            <label>Client Name</label>
+                            <input type="text" name="name" value="{{ client.name }}" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Group</label>
+                            <select name="group_id" required>
+                                <option value="">-- choose group --</option>
+                                {% for group in groups %}
+                                <option value="{{ group.id }}" {% if client.group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Update Client</button>
+                    </form>
+                </div>
+                <div>
+                    <form method="post" onsubmit="return confirm('Are you sure you want to delete this client?');">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="client_id" value="{{ client.id }}">
+                        <button type="submit" class="btn btn-danger">🗑️ Delete</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="card">
+    <h3>Clients list</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Client Name</th>
+                <th>Group</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for client in clients %}
+            <tr>
+                <td>{{ client.name }}</td>
+                <td>{{ client.group.name|default:'No Group' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p>No clients yet. Add one above.</p>
+{% endif %}
+{% endblock %}

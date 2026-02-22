@@ -1,0 +1,93 @@
+{% extends 'core/base.html' %}
+
+{% block page_title %}📁 Manage Groups{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3>Create a new group</h3>
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="add">
+        <div class="form-group">
+            <label>Group name (e.g. January 2026)</label>
+            <input type="text" name="name" required>
+        </div>
+        <div class="form-group">
+            <label>Start date</label>
+            <input type="date" name="start_date" value="{{ today }}" required>
+        </div>
+        <div class="form-group">
+            <label>End date</label>
+            <input type="date" name="end_date" value="{{ today }}" required>
+        </div>
+        <button type="submit" class="btn btn-success">Add group</button>
+    </form>
+</div>
+
+{% if groups %}
+<div class="card">
+    <h3>Edit or Delete Groups</h3>
+    {% for group in groups %}
+    <div class="expander">
+        <div class="expander-header">📁 {{ group.name }} ({{ group.start_date }} to {{ group.end_date }})</div>
+        <div class="expander-content">
+            <div style="display: grid; grid-template-columns: 3fr 1fr; gap: 20px;">
+                <div>
+                    <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="update">
+                        <input type="hidden" name="group_id" value="{{ group.id }}">
+                        <div class="form-group">
+                            <label>Group Name</label>
+                            <input type="text" name="name" value="{{ group.name }}" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Start Date</label>
+                            <input type="date" name="start_date" value="{{ group.start_date|date:'Y-m-d' }}" required>
+                        </div>
+                        <div class="form-group">
+                            <label>End Date</label>
+                            <input type="date" name="end_date" value="{{ group.end_date|date:'Y-m-d' }}" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Update Group</button>
+                    </form>
+                </div>
+                <div>
+                    <form method="post" onsubmit="return confirm('Are you sure you want to delete this group?');">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="group_id" value="{{ group.id }}">
+                        <button type="submit" class="btn btn-danger">🗑️ Delete</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="card">
+    <h3>Existing groups</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Group Name</th>
+                <th>Start Date</th>
+                <th>End Date</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for group in groups %}
+            <tr>
+                <td>{{ group.name }}</td>
+                <td>{{ group.start_date }}</td>
+                <td>{{ group.end_date }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p>No groups yet. Add one above.</p>
+{% endif %}
+{% endblock %}
