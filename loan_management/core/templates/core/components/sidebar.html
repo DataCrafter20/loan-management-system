@@ -1,0 +1,14 @@
+<nav>
+    <ul>
+        <li><a href="{% url 'core:dashboard' %}" {% if request.resolver_match.url_name == 'dashboard' %}class="active"{% endif %}>📘 Dashboard</a></li>
+        <li><a href="{% url 'core:groups' %}" {% if request.resolver_match.url_name == 'groups' %}class="active"{% endif %}>📁 Groups</a></li>
+        <li><a href="{% url 'core:clients' %}" {% if request.resolver_match.url_name == 'clients' %}class="active"{% endif %}>👤 Clients</a></li>
+        <li><a href="{% url 'core:loans' %}" {% if request.resolver_match.url_name == 'loans' %}class="active"{% endif %}>💰 Loans</a></li>
+        <li><a href="{% url 'core:payments' %}" {% if request.resolver_match.url_name == 'payments' %}class="active"{% endif %}>💳 Payments</a></li>
+        <li><a href="{% url 'core:monthly_overview' %}" {% if request.resolver_match.url_name == 'monthly_overview' %}class="active"{% endif %}>📆 Overview</a></li>
+        <li><a href="{% url 'core:search' %}" {% if request.resolver_match.url_name == 'search' %}class="active"{% endif %}>🔍 Search</a></li>
+        <li><a href="{% url 'core:pdf_export' %}" {% if request.resolver_match.url_name == 'pdf_export' %}class="active"{% endif %}>📄 PDF</a></li>
+        <li><a href="{% url 'core:change_password' %}" {% if request.resolver_match.url_name == 'change_password' %}class="active"{% endif %}>🔐 Password</a></li>
+        <li><a href="{% url 'core:logout' %}">🚪 Logout</a></li>
+    </ul>
+</nav>
